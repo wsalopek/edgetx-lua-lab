@@ -13,15 +13,18 @@ const lcd = new Lcd(480, 272, await loadFontsNode());
 let t = 1000;
 const host = new LuaHost({ fengari: loadFengari(), lcd, files, bitmaps, now: () => t, modelName: 'Endurance', onLog: (l) => console.log('lua>', l) });
 const pt = new Passthrough({ roll: 18, pitch: 6, yaw: 135, vspeed: 1.2, hspeed: 11 });
-let r = host.loadWidget('/WIDGETS/yaapu/main.lua', { w: 480, h: 272 }, { 'Screen Type': Number(process.env.PAGE || 1) });
+const page = Number(process.env.PAGE || 1);
+let r = host.loadWidget('/WIDGETS/yaapu/main.lua', { w: 480, h: 272 }, { 'Screen Type': 1 });
+for (let p = 2; p <= 4 && r.ok; p++) r = host.newInstance('p' + p, { w: 480, h: 272 }, { 'Screen Type': p });
+const vis = page === 1 ? 'default' : 'p' + page;
 console.log('create:', r.ok ? 'ok' : r.error);
 const msgs = [['Yaapu Telemetry Widget', 7], ['EKF3 IMU0 is using GPS', 6], ['PreArm: Compass not calibrated', 4], ['Flight plan received', 6]];
 for (let i = 0; i < 400 && r.ok; i++) {
   t += 10; // 100 ms per loop => 40 s of flight
   if (i === 20) for (const [m, sev] of msgs) host.sportQueue.push(...pt.messageFrames(m, sev));
   if (i % 3 === 0) feed(host, pt);
-  r = host.callWidget('background'); if (!r.ok) { console.log('background:', r.error); break; }
-  if (i % 4 === 0) { r = host.callWidget('refresh'); if (!r.ok) { console.log('refresh:', r.error); break; } }
+  r = host.callWidget('background', 'default'); if (!r.ok) { console.log('background:', r.error); break; }
+  if (i % 4 === 0) { r = host.callWidget('refresh', vis); if (!r.ok) { console.log('refresh:', r.error); break; } }
 }
 console.log('unsupported:', [...lcd.unsupported].map(([k, v]) => `${k}×${v}`).join(', ') || 'none');
 writePng(out, lcd.w, lcd.h, lcd.toRGBA());

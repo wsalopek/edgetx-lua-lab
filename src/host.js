@@ -17,6 +17,15 @@ math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 math.log10 = math.log10 or function(x) return math.log(x, 10) end
 math.ldexp = math.ldexp or function(m, e) return m * 2.0 ^ e end
 string.gfind = string.gfind or string.gmatch
+local _fmt = string.format
+string.format = function(f, ...) -- EdgeTX tolerates floats for %d (truncates)
+  local a = table.pack(...); local i = 0
+  for spec in f:gmatch("%%[%-+ #0]*%d*%.?%d*([%a%%])") do
+    if spec ~= "%" then i = i + 1
+      if (spec == "d" or spec == "i" or spec == "x" or spec == "X" or spec == "c" or spec == "o" or spec == "u") and math.type(a[i]) == "float" then a[i] = math.floor(a[i]) end end
+  end
+  return _fmt(f, table.unpack(a, 1, a.n))
+end
 collectgarbage = function(opt) if opt == "count" then return 1024.0 end return 0 end -- fengari has no lua_gc
 io = {}
 local files = {}
@@ -126,15 +135,21 @@ export class LuaHost {
     if (st === lua.LUA_OK) st = lua.lua_pcall(L, 0, 1, 0);
     if (st !== lua.LUA_OK) { const error = to_jsstring(lua.lua_tostring(L, -1)); lua.lua_pop(L, 1); return { ok: false, error }; }
     lua.lua_setglobal(L, this.S('__widgetModule'));
-    const r = this.exec(`
-      __zone = { x = 0, y = 0, w = ${zone.w}, h = ${zone.h} }
-      __opts = {}
-      ${Object.entries(options).map(([k, v]) => `__opts[${JSON.stringify(k)}] = ${JSON.stringify(v)}`).join(String.fromCharCode(10))}
-      __widget = __widgetModule.create(__zone, __opts)`, '=create');
-    return r;
+    this.instances = new Set();
+    return this.newInstance('default', zone, options);
   }
-  callWidget(fn = 'refresh') {
-    return this.exec(`if __widgetModule.${fn} then __widgetModule.${fn}(__widget) end`, '=' + fn);
+  // EdgeTX can show the same widget on several screens; each gets its own create() but they share script state.
+  newInstance(id, zone, options = {}) {
+    this.instances.add(id);
+    const opts = Object.entries(options).map(([k, v]) => `o[${JSON.stringify(k)}] = ${JSON.stringify(v)}`).join(String.fromCharCode(10));
+    return this.exec(`
+      __instances = __instances or {}
+      local o = {}
+      ${opts}
+      __instances[${JSON.stringify(id)}] = __widgetModule.create({ x = 0, y = 0, w = ${zone.w}, h = ${zone.h} }, o)`, '=create');
+  }
+  callWidget(fn = 'refresh', id = 'default') {
+    return this.exec(`local w = __instances[${JSON.stringify(id)}]; if __widgetModule.${fn} then __widgetModule.${fn}(w) end`, '=' + fn);
   }
 
   // evaluate a Lua expression and return its tostring()

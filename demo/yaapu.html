@@ -40,6 +40,8 @@ let t = 1000;
 const host = new LuaHost({ fengari: window.fengari, lcd, files, bitmaps, now: () => t, modelName: 'Endurance', onLog: (l) => console.log('lua>', l) });
 const pt = new Passthrough();
 let r = host.loadWidget(prefix + 'main.lua', { w: 480, h: 272 }, { 'Screen Type': 1 });
+for (let p = 2; p <= 4 && r.ok; p++) r = host.newInstance('p' + p, { w: 480, h: 272 }, { 'Screen Type': p });
+let vis = 'default';
 const show = (m, ok = true) => { $('msg').className = ok ? '' : 'err'; $('msg').textContent = m; };
 if (!r.ok) show(r.error, false);
 
@@ -54,16 +56,16 @@ $('armb').onclick = () => { pt.set({ armed: !pt.s.armed }); $('armb').textConten
 const samples = ['EKF3 IMU0 tilt alignment complete', 'PreArm: Compass not calibrated', 'Battery 1 is low 14.6V used 1850 mAh', 'RTL: Reached home', 'Mission: 3 WP'];
 let mi = 0;
 $('msgb').onclick = () => { host.sportQueue.push(...pt.messageFrames(samples[mi % samples.length], [6, 4, 3, 6, 6][mi % 5])); mi++; };
-$('page').onchange = (e) => { host.exec(`__widget.options["Screen Type"] = ${+e.target.value}`); };
+$('page').onchange = (e) => { vis = +e.target.value === 1 ? 'default' : 'p' + e.target.value; };
 
 let n = 0;
 setInterval(() => {
   if (!r.ok) return;
   t += 10; n++;
   if (n % 3 === 0) feed(host, pt);
-  const b = host.callWidget('background'); if (!b.ok) { r = b; show(b.error, false); return; }
+  const b = host.callWidget('background', 'default'); if (!b.ok) { r = b; show(b.error, false); return; }
   if (n % 2 === 0) {
-    const f = host.callWidget('refresh'); if (!f.ok) { r = f; show(f.error, false); return; }
+    const f = host.callWidget('refresh', vis); if (!f.ok) { r = f; show(f.error, false); return; }
     ctx.putImageData(new ImageData(lcd.toRGBA(), 480, 272), 0, 0);
   }
 }, 100);
