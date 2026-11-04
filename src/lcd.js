@@ -106,6 +106,41 @@ export class Lcd {
     }
   }
 
+  // line clipped to a box (Cohen-Sutherland, inclusive bounds)
+  lineClipped(x1, y1, x2, y2, xmin, xmax, ymin, ymax, pat, c) {
+    const code = (x, y) => (x < xmin ? 1 : x > xmax ? 2 : 0) | (y < ymin ? 4 : y > ymax ? 8 : 0);
+    let c1 = code(x1, y1), c2 = code(x2, y2);
+    for (;;) {
+      if (!(c1 | c2)) break;
+      if (c1 & c2) return;
+      const co = c1 || c2; let x, y;
+      if (co & 8) { x = x1 + (x2 - x1) * (ymax - y1) / (y2 - y1); y = ymax; }
+      else if (co & 4) { x = x1 + (x2 - x1) * (ymin - y1) / (y2 - y1); y = ymin; }
+      else if (co & 2) { y = y1 + (y2 - y1) * (xmax - x1) / (x2 - x1); x = xmax; }
+      else { y = y1 + (y2 - y1) * (xmin - x1) / (x2 - x1); x = xmin; }
+      if (co === c1) { x1 = x; y1 = y; c1 = code(x1, y1); } else { x2 = x; y2 = y; c2 = code(x2, y2); }
+    }
+    this.line(Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2), pat, c);
+  }
+
+  // Artificial-horizon "ground": fills the part of the box below the horizon line.
+  // The line passes through the box centre shifted by pitch, tilted by roll. (EdgeTX does this natively.)
+  hudRect(pitch, roll, xmin, xmax, ymin, ymax, c) {
+    const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2 + pitch * ((ymax - ymin) / 50);
+    const t = Math.tan((roll * Math.PI) / 180);
+    for (let y = ymin; y <= ymax; y += 1) {
+      // x range where this row is below the horizon: y > cy + (x-cx)*t  (t>0 => left side of row is ground...)
+      let x0 = xmin, x1 = xmax;
+      if (Math.abs(t) < 1e-9) { if (y < cy) continue; }
+      else {
+        const xe = cx + (y - cy) / t; // x where the horizon crosses this row
+        if (t > 0) x0 = Math.max(xmin, Math.ceil(xe)); else x1 = Math.min(xmax, Math.floor(xe));
+        if (Math.abs(roll) > 90) { x0 = xmin; x1 = xmax; if (t > 0) x1 = Math.min(xmax, Math.floor(xe)); else x0 = Math.max(xmin, Math.ceil(xe)); }
+      }
+      if (x1 >= x0) for (let x = x0; x <= x1; x++) this.pixel(x, y, c);
+    }
+  }
+
   // ---- text ----
   drawText(x, y, text, flags = 0, invColorFlags) {
     text = String(text);

@@ -2,7 +2,13 @@
 // Works in the browser (global `fengari` from vendor/fengari/fengari-web.js) and in Node (tests).
 import { FLAGS, COLOR_INDEX, THEME_COLOR_COUNT, colorToFlags, rgb565, Bitmap } from './lcd.js';
 
-const norm = (p) => String(p).replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+const norm = (p) => {
+  const out = [];
+  for (const seg of String(p).replace(/\\/g, '/').toLowerCase().split('/')) {
+    if (seg === '..') out.pop(); else if (seg && seg !== '.') out.push(seg);
+  }
+  return out.join('/');
+};
 
 // Lua-side shims: things EdgeTX provides that plain Lua 5.3 lacks (io on a virtual SD card, old math names).
 const SHIMS = `
@@ -11,6 +17,7 @@ math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
 math.log10 = math.log10 or function(x) return math.log(x, 10) end
 math.ldexp = math.ldexp or function(m, e) return m * 2.0 ^ e end
 string.gfind = string.gfind or string.gmatch
+collectgarbage = function(opt) if opt == "count" then return 1024.0 end return 0 end -- fengari has no lua_gc
 io = {}
 local files = {}
 function io.open(path, mode)
@@ -56,7 +63,7 @@ export class LuaHost {
     this.files = new Map(); this.bitmaps = new Map();
     for (const [p, t] of Object.entries(opts.files || {})) this.files.set(norm(p), t);
     for (const [p, b] of Object.entries(opts.bitmaps || {})) this.bitmaps.set(norm(p), b);
-    this.telemetry = opts.telemetry || {};
+    this.telemetry = Object.assign({ 'tx-voltage': 7.9, RSSI: 100, 'RQly': 100, 'TQly': 100, 'TPWR': 0, 'RFMD': 0 }, opts.telemetry || {});
     this.now = opts.now || (() => Math.floor(Date.now() / 10));
     this.log = [];
     this.onLog = opts.onLog || (() => {});
@@ -109,6 +116,27 @@ export class LuaHost {
     if (st !== lua.LUA_OK) { const error = to_jsstring(lua.lua_tostring(L, -1)); lua.lua_pop(L, 1); return { ok: false, error }; }
     return { ok: true };
   }
+  // ---- widgets: load main.lua, call create()/refresh() like EdgeTX does ----
+  loadWidget(mainPath, zone, options = {}) {
+    const { lua, lauxlib, to_jsstring } = this.f; const L = this.L;
+    const text = this.files.get(norm(mainPath));
+    if (text === undefined) return { ok: false, error: 'no such file ' + mainPath };
+    const buf = this.S(text);
+    let st = lauxlib.luaL_loadbuffer(L, buf, buf.length, this.S('@' + mainPath));
+    if (st === lua.LUA_OK) st = lua.lua_pcall(L, 0, 1, 0);
+    if (st !== lua.LUA_OK) { const error = to_jsstring(lua.lua_tostring(L, -1)); lua.lua_pop(L, 1); return { ok: false, error }; }
+    lua.lua_setglobal(L, this.S('__widgetModule'));
+    const r = this.exec(`
+      __zone = { x = 0, y = 0, w = ${zone.w}, h = ${zone.h} }
+      __opts = {}
+      ${Object.entries(options).map(([k, v]) => `__opts[${JSON.stringify(k)}] = ${JSON.stringify(v)}`).join(String.fromCharCode(10))}
+      __widget = __widgetModule.create(__zone, __opts)`, '=create');
+    return r;
+  }
+  callWidget(fn = 'refresh') {
+    return this.exec(`if __widgetModule.${fn} then __widgetModule.${fn}(__widget) end`, '=' + fn);
+  }
+
   // evaluate a Lua expression and return its tostring()
   evalString(expr) {
     const { lua, lauxlib, to_jsstring } = this.f; const L = this.L;
@@ -135,8 +163,9 @@ export class LuaHost {
     const { lua, lauxlib, to_jsstring } = this.f; const lcd = this.lcd;
     const L = this.L;
     this._newTable('lcd');
-    const I = (i) => lauxlib.luaL_checkinteger(L, i);
-    const O = (i, d) => lauxlib.luaL_optinteger(L, i, d);
+    // EdgeTX accepts floats for integer arguments (truncates), so scripts pass computed coordinates freely
+    const I = (i) => Math.trunc(lauxlib.luaL_checknumber(L, i));
+    const O = (i, d) => (lua.lua_isnoneornil(L, i) ? d : Math.trunc(lauxlib.luaL_checknumber(L, i)));
     const U = (i, d) => O(i, d) >>> 0;
     const str = (i) => to_jsstring(lauxlib.luaL_checkstring(L, i));
     const def = (n, fn) => this._def('lcd', n, fn);
@@ -183,10 +212,14 @@ export class LuaHost {
       else lua.lua_pushnil(L);
       return 1;
     });
+    def('drawLineWithClipping', () => { lcd.lineClipped(I(1), I(2), I(3), I(4), I(5), I(6), I(7), I(8), I(9), lcd.resolve(U(10, 0))); return 0; });
+    def('drawHudRectangle', () => {
+      lcd.hudRect(lauxlib.luaL_checknumber(L, 1), lauxlib.luaL_checknumber(L, 2), I(3), I(4), I(5), I(6), lcd.resolve(U(7, 0))); return 0;
+    });
     // not implemented yet: record the call so we know what scripts need
     for (const n of ['invertRect', 'drawTextLines', 'drawChannel', 'drawSwitch', 'drawSource', 'drawBitmapPattern', 'drawBitmapPatternPie',
       'drawCircle', 'drawFilledCircle', 'drawTriangle', 'drawFilledTriangle', 'drawArc', 'drawPie', 'drawAnnulus',
-      'drawLineWithClipping', 'drawHudRectangle', 'exitFullScreen']) {
+      'exitFullScreen']) {
       this._def('lcd', n, () => { lcd.noteUnsupported('lcd.' + n); return 0; });
     }
   }
@@ -221,7 +254,7 @@ export class LuaHost {
     this._def(null, 'getValue', () => {
       let v = 0;
       if (lua.lua_type(L, 1) === lua.LUA_TSTRING) v = this.telemetry[to_jsstring(lua.lua_tostring(L, 1))] ?? 0;
-      else v = this.telemetry['#' + lauxlib.luaL_checkinteger(L, 1)] ?? 0;
+      else { const id = lauxlib.luaL_checkinteger(L, 1); const nm = id >= 1000 ? Object.keys(this.telemetry)[id - 1000] : '#' + id; v = this.telemetry[nm] ?? 0; }
       if (typeof v === 'string' || (typeof v === 'object')) { this._pushTable(v); return 1; }
       Number.isInteger(v) ? lua.lua_pushinteger(L, v) : lua.lua_pushnumber(L, v); return 1;
     });
@@ -243,6 +276,15 @@ export class LuaHost {
     this._def(null, 'getUsage', () => { lua.lua_pushinteger(L, 10); return 1; });
     this._def(null, 'getCpuLoad', () => { lua.lua_pushinteger(L, 10); return 1; });
     this._def(null, 'killEvents', () => 0);
+    // telemetry frame queues: host.sportQueue.push([sensorId, frameId, dataId, value])
+    this.sportQueue = []; this.crsfQueue = [];
+    this._def(null, 'sportTelemetryPop', () => {
+      const f = this.sportQueue.shift(); if (!f) { lua.lua_pushnil(L); return 1; }
+      for (const v of f) lua.lua_pushnumber(L, v); return f.length; });
+    this._def(null, 'crossfireTelemetryPop', () => { lua.lua_pushnil(L); return 1; });
+    this._def(null, 'sportTelemetryPush', () => { lua.lua_pushboolean(L, true); return 1; });
+    this._def(null, 'crossfireTelemetryPush', () => { lua.lua_pushboolean(L, true); return 1; });
+    this._def(null, 'popupWarning', () => 0); this._def(null, 'playTone', () => 0);
     for (const n of ['playFile', 'playNumber', 'playDuration', 'playTone', 'playHaptic', 'flushAudio']) {
       this._def(null, n, () => { this.events.push(n); return 0; });
     }
