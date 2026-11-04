@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>EdgeTX Lua Lab - editor + preview (prototype)</title>
+<style>
+ body{font:14px system-ui,sans-serif;background:#1e1e1e;color:#ddd;margin:0;padding:16px}
+ h1{font-size:18px;margin:0 0 4px} p{margin:2px 0 10px;color:#aaa}
+ .row{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+ textarea{width:560px;height:430px;background:#111;color:#cfe;border:1px solid #444;font:13px Consolas,monospace;padding:8px;tab-size:2}
+ canvas{image-rendering:pixelated;border:1px solid #555;width:720px;height:408px;display:block}
+ #msg{white-space:pre-wrap;font:12px Consolas,monospace;margin-top:6px;min-height:20px}
+ .err{color:#f77}.ok{color:#7d7} label{margin-right:12px}
+</style></head><body>
+<h1>EdgeTX Lua Lab <small style="color:#888;font-weight:normal">prototype &mdash; TX16S, 480&times;272</small></h1>
+<p>Edit the Lua on the left; the radio screen updates as you type. Uses the real EdgeTX fonts and Lua 5.3.</p>
+<div class="row">
+<div><textarea id="code" spellcheck="false"></textarea><div id="msg"></div></div>
+<div><canvas id="lcd" width="480" height="272"></canvas>
+<p>Telemetry: <label>RSSI <input type="range" id="rssi" min="0" max="100" value="99"> <span id="rssiv">99</span></label>
+<label>Alt <input type="range" id="alt" min="-20" max="400" value="12"> <span id="altv">12</span></label></p></div>
+</div>
+<script src="../vendor/fengari/fengari-web.js"></script>
+<script type="module">
+import { Lcd, loadFonts } from '../src/lcd.js';
+import { LuaHost } from '../src/host.js';
+const fengari = window.fengari;
+const fonts = await loadFonts(async (n) => (await fetch(`../src/fonts/${n}.json`)).json());
+const sample = `-- A tiny EdgeTX-style screen. Edit me!
+local rssi = getValue("RSSI")
+local alt = getValue("Alt")
+lcd.clear(COLOR_THEME_PRIMARY1)
+lcd.setColor(CUSTOM_COLOR, lcd.RGB(20, 40, 70))
+lcd.drawFilledRectangle(0, 0, 480, 20, CUSTOM_COLOR)
+lcd.drawText(2, 0, model.getInfo().name, WHITE)
+lcd.drawText(478, 0, "RS: " .. rssi, WHITE + RIGHT)
+
+lcd.setColor(CUSTOM_COLOR, YELLOW)
+lcd.drawText(4, 40, "BOLD is its own font", BOLD + CUSTOM_COLOR)
+lcd.drawText(4, 64, "SMLSIZE + BOLD is MIDSIZE", SMLSIZE + BOLD + WHITE)
+lcd.drawText(4, 100, "ALT m", SMLSIZE + WHITE)
+lcd.drawNumber(4, 114, alt * 10, DBLSIZE + PREC1 + WHITE)
+
+local pct = math.max(1, math.min(100, rssi))
+lcd.drawGauge(250, 120, 200, 16, pct, 100, pct > 50 and GREEN or RED)
+lcd.drawRectangle(10, 170, 140, 60, lcd.RGB(255, 80, 80), 2)
+lcd.drawLine(10, 240, 200, 262, SOLID, WHITE)
+`;
+const $ = (id) => document.getElementById(id);
+$('code').value = sample;
+const lcd = new Lcd(480, 272, fonts);
+const ctx = $('lcd').getContext('2d');
+const telemetry = { RSSI: 99, Alt: 12 };
+function run() {
+  const host = new LuaHost({ fengari, lcd, telemetry: { ...telemetry } });
+  lcd.clear(0);
+  const r = host.exec($('code').value, '=script');
+  const img = new ImageData(lcd.toRGBA(), 480, 272); ctx.putImageData(img, 0, 0);
+  const unsup = [...lcd.unsupported.keys()];
+  $('msg').className = r.ok ? 'ok' : 'err';
+  $('msg').textContent = (r.ok ? 'ran OK' : r.error) + (host.log.length ? '\n' + host.log.join('\n') : '') + (unsup.length ? '\nnot simulated yet: ' + unsup.join(', ') : '');
+}
+$('code').addEventListener('input', run);
+for (const [id, key] of [['rssi', 'RSSI'], ['alt', 'Alt']]) $(id).addEventListener('input', (e) => { telemetry[key] = +e.target.value; $(id + 'v').textContent = e.target.value; run(); });
+run();
+</script></body></html>
