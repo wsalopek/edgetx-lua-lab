@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>EdgeTX Lua Lab - Yaapu on a simulated TX16S</title>
+<style>
+ body{font:14px system-ui,sans-serif;background:#1e1e1e;color:#ddd;margin:0;padding:16px}
+ h1{font-size:18px;margin:0 0 4px} p{margin:2px 0 10px;color:#aaa}
+ .row{display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+ canvas{image-rendering:pixelated;border:1px solid #555;width:720px;height:408px;display:block}
+ .ctl{display:grid;grid-template-columns:90px 200px 50px;gap:4px 8px;align-items:center;font-size:13px}
+ .ctl span.v{color:#9cf;text-align:right} button,select{margin:4px 4px 0 0}
+ #msg{font:12px Consolas,monospace;white-space:pre-wrap;min-height:20px;margin-top:6px}.err{color:#f77}
+</style></head><body>
+<h1>EdgeTX Lua Lab <small style="color:#888;font-weight:normal">&mdash; the real Yaapu widget on a simulated TX16S (480&times;272)</small></h1>
+<p>Drag the sliders to fly. Yaapu receives ArduPilot passthrough telemetry exactly as on a radio.</p>
+<div class="row">
+<div><canvas id="lcd" width="480" height="272"></canvas><div id="msg"></div>
+ <p>Screen: <select id="page"><option value="1">1 - main</option><option value="2">2 - messages</option><option value="3">3 - min/max</option><option value="4">4 - dual battery</option></select>
+ <button id="armb">Disarm</button><button id="msgb">Send a status message</button></p></div>
+<div class="ctl" id="ctl"></div>
+</div>
+<script src="../vendor/fengari/fengari-web.js"></script>
+<script type="module">
+import { Lcd, loadFonts } from '../src/lcd.js';
+import { LuaHost } from '../src/host.js';
+import { Passthrough, feed } from '../src/passthrough.js';
+const $ = (id) => document.getElementById(id);
+const fonts = await loadFonts(async (n) => (await fetch(`../src/fonts/${n}.json`)).json());
+const base = '../vendor/yaapu/', prefix = '/WIDGETS/yaapu/';
+const names = await (await fetch(base + 'manifest.json')).json();
+const files = {}, bitmaps = {};
+await Promise.all(names.map(async (n) => {
+  const res = await fetch(base + n);
+  if (/\.png$/i.test(n)) {
+    const bmp = await createImageBitmap(await res.blob(), { premultiplyAlpha: 'none' });
+    const c = new OffscreenCanvas(bmp.width, bmp.height), g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+    bitmaps[prefix + n] = { w: bmp.width, h: bmp.height, rgba: g.getImageData(0, 0, bmp.width, bmp.height).data };
+  } else files[prefix + n] = await res.text();
+}));
+const lcd = new Lcd(480, 272, fonts), ctx = $('lcd').getContext('2d');
+let t = 1000;
+const host = new LuaHost({ fengari: window.fengari, lcd, files, bitmaps, now: () => t, modelName: 'Endurance', onLog: (l) => console.log('lua>', l) });
+const pt = new Passthrough();
+let r = host.loadWidget(prefix + 'main.lua', { w: 480, h: 272 }, { 'Screen Type': 1 });
+const show = (m, ok = true) => { $('msg').className = ok ? '' : 'err'; $('msg').textContent = m; };
+if (!r.ok) show(r.error, false);
+
+const sliders = [['roll', 'Roll', -90, 90, 1], ['pitch', 'Pitch', -45, 45, 1], ['yaw', 'Heading', 0, 359, 1], ['hspeed', 'Speed m/s', 0, 40, 1],
+  ['vspeed', 'Climb m/s', -10, 10, 0.1], ['homeAlt', 'Alt (home) m', 0, 400, 1], ['homeDist', 'Home dist m', 0, 2000, 10], ['battV', 'Battery V', 12, 17, 0.1],
+  ['battA', 'Current A', 0, 60, 0.5], ['battMah', 'Used mAh', 0, 5000, 10], ['sats', 'Satellites', 0, 15, 1], ['rssi', 'RSSI', 0, 100, 1]];
+for (const [k, label, min, max, step] of sliders) {
+  $('ctl').insertAdjacentHTML('beforeend', `<label>${label}</label><input type="range" id="s_${k}" min="${min}" max="${max}" step="${step}" value="${pt.s[k]}"><span class="v" id="v_${k}">${pt.s[k]}</span>`);
+  $('s_' + k).addEventListener('input', (e) => { pt.set({ [k]: +e.target.value }); $('v_' + k).textContent = e.target.value; });
+}
+$('armb').onclick = () => { pt.set({ armed: !pt.s.armed }); $('armb').textContent = pt.s.armed ? 'Disarm' : 'Arm'; };
+const samples = ['EKF3 IMU0 tilt alignment complete', 'PreArm: Compass not calibrated', 'Battery 1 is low 14.6V used 1850 mAh', 'RTL: Reached home', 'Mission: 3 WP'];
+let mi = 0;
+$('msgb').onclick = () => { host.sportQueue.push(...pt.messageFrames(samples[mi % samples.length], [6, 4, 3, 6, 6][mi % 5])); mi++; };
+$('page').onchange = (e) => { host.exec(`__widget.options["Screen Type"] = ${+e.target.value}`); };
+
+let n = 0;
+setInterval(() => {
+  if (!r.ok) return;
+  t += 10; n++;
+  if (n % 3 === 0) feed(host, pt);
+  const b = host.callWidget('background'); if (!b.ok) { r = b; show(b.error, false); return; }
+  if (n % 2 === 0) {
+    const f = host.callWidget('refresh'); if (!f.ok) { r = f; show(f.error, false); return; }
+    ctx.putImageData(new ImageData(lcd.toRGBA(), 480, 272), 0, 0);
+  }
+}, 100);
+</script></body></html>

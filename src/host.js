@@ -284,6 +284,12 @@ export class LuaHost {
     this._def(null, 'crossfireTelemetryPop', () => { lua.lua_pushnil(L); return 1; });
     this._def(null, 'sportTelemetryPush', () => { lua.lua_pushboolean(L, true); return 1; });
     this._def(null, 'crossfireTelemetryPush', () => { lua.lua_pushboolean(L, true); return 1; });
+    // setTelemetryValue(id, subId, instance, value, unit, decimals, name): creates/updates a sensor
+    this._def(null, 'setTelemetryValue', () => {
+      const val = lauxlib.luaL_checknumber(L, 4), dec = lua.lua_isnoneornil(L, 6) ? 0 : lauxlib.luaL_checknumber(L, 6);
+      const name = lua.lua_isnoneornil(L, 7) ? '#' + lauxlib.luaL_checkinteger(L, 1) : to_jsstring(lauxlib.luaL_checkstring(L, 7));
+      this.telemetry[name] = val / 10 ** dec; lua.lua_pushboolean(L, true); return 1;
+    });
     this._def(null, 'popupWarning', () => 0); this._def(null, 'playTone', () => 0);
     for (const n of ['playFile', 'playNumber', 'playDuration', 'playTone', 'playHaptic', 'flushAudio']) {
       this._def(null, n, () => { this.events.push(n); return 0; });

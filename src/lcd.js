@@ -126,18 +126,18 @@ export class Lcd {
   // Artificial-horizon "ground": fills the part of the box below the horizon line.
   // The line passes through the box centre shifted by pitch, tilted by roll. (EdgeTX does this natively.)
   hudRect(pitch, roll, xmin, xmax, ymin, ymax, c) {
+    // ground = half-plane below the horizon in the aircraft frame: (x-cx)*sin(roll) + (y-cy)*cos(roll) > 0
     const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2 + pitch * ((ymax - ymin) / 50);
-    const t = Math.tan((roll * Math.PI) / 180);
-    for (let y = ymin; y <= ymax; y += 1) {
-      // x range where this row is below the horizon: y > cy + (x-cx)*t  (t>0 => left side of row is ground...)
+    const sr = Math.sin((roll * Math.PI) / 180), cr = Math.cos((roll * Math.PI) / 180);
+    for (let y = ymin; y <= ymax; y++) {
+      const k = (y - cy) * cr; // ground where (x-cx)*sr + k > 0
       let x0 = xmin, x1 = xmax;
-      if (Math.abs(t) < 1e-9) { if (y < cy) continue; }
+      if (Math.abs(sr) < 1e-9) { if (k <= 0) continue; }
       else {
-        const xe = cx + (y - cy) / t; // x where the horizon crosses this row
-        if (t > 0) x0 = Math.max(xmin, Math.ceil(xe)); else x1 = Math.min(xmax, Math.floor(xe));
-        if (Math.abs(roll) > 90) { x0 = xmin; x1 = xmax; if (t > 0) x1 = Math.min(xmax, Math.floor(xe)); else x0 = Math.max(xmin, Math.ceil(xe)); }
+        const xe = cx - k / sr; // boundary
+        if (sr > 0) x0 = Math.max(xmin, Math.floor(xe) + 1); else x1 = Math.min(xmax, Math.ceil(xe) - 1);
       }
-      if (x1 >= x0) for (let x = x0; x <= x1; x++) this.pixel(x, y, c);
+      for (let x = x0; x <= x1; x++) this.pixel(x, y, c);
     }
   }
 
