@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>EdgeTX Lua Lab - font check</title>
+<style>
+ body{font:14px system-ui,sans-serif;background:#1e1e1e;color:#ddd;margin:20px}
+ h1{font-size:18px;margin:0 0 4px} p{margin:4px 0 12px;max-width:900px;color:#aaa}
+ canvas{image-rendering:pixelated;border:1px solid #555;display:block;margin:8px 0}
+ code{background:#333;padding:1px 4px;border-radius:3px;color:#9cf}
+ table{border-collapse:collapse;margin-top:10px} td,th{border:1px solid #444;padding:3px 8px;text-align:left}
+</style></head><body>
+<h1>EdgeTX Lua Lab &mdash; real EdgeTX fonts in the browser</h1>
+<p>Drawn from EdgeTX's own compiled LVGL font data (480x272 screen, shown at 2x). The red line is x=405, where the
+old Yaapu side panel began. Flags are <em>added</em> by EdgeTX, so <code>SMLSIZE+BOLD</code> is a different size, not a bold small font.</p>
+<canvas id="lcd" width="480" height="272" style="width:960px;height:544px"></canvas>
+<table id="widths"><tr><th>font</th><th>flag</th><th>line height</th><th>width of the long message</th><th>fits in 480?</th></tr></table>
+<script type="module">
+import { LvglFont, FONT_NAMES, fontIndex } from '../src/font.js';
+const fonts = [];
+for (const n of FONT_NAMES) fonts.push(new LvglFont(await (await fetch(`../src/fonts/${n}.json`)).json()));
+const STD = 0 << 8, BOLD = 1 << 8, TINSIZE = 2 << 8, SMLSIZE = 3 << 8, MIDSIZE = 4 << 8, DBLSIZE = 5 << 8, XXLSIZE = 6 << 8;
+const msg = 'INF u-blox 1 HW: 000A0000 SW: ROM SPG 5.10 (7b202e)';
+const cv = document.getElementById('lcd'), ctx = cv.getContext('2d');
+const img = ctx.createImageData(480, 272);
+for (let i = 0; i < img.data.length; i += 4) { img.data[i] = 18; img.data[i + 1] = 26; img.data[i + 2] = 40; img.data[i + 3] = 255; }
+const rows = [
+  ['TINSIZE', TINSIZE, [150, 200, 255]], ['SMLSIZE', SMLSIZE, [255, 255, 255]], ['STD (no flag)', STD, [255, 255, 255]],
+  ['BOLD', BOLD, [255, 255, 255]], ['MIDSIZE', MIDSIZE, [255, 220, 120]], ['SMLSIZE+BOLD  (= MIDSIZE!)', SMLSIZE + BOLD, [255, 120, 120]],
+  ['DBLSIZE', DBLSIZE, [140, 255, 140]],
+];
+let y = 2;
+const table = document.getElementById('widths');
+for (const [label, flags, rgb] of rows) {
+  const f = fonts[fontIndex(flags)];
+  f.drawText(img.data, 480, 272, 2, y, `${label}: ${msg}`, rgb);
+  y += f.lineHeight + 1;
+  const w = f.textWidth(msg);
+  table.insertAdjacentHTML('beforeend', `<tr><td>${FONT_NAMES[fontIndex(flags)]}</td><td>${label}</td><td>${f.lineHeight}px</td><td>${w}px</td><td>${w <= 480 ? 'yes' : '<b style="color:#f66">no</b>'}</td></tr>`);
+}
+for (let yy = 0; yy < 272; yy++) { const o = (yy * 480 + 405) * 4; img.data[o] = 255; img.data[o + 1] = 40; img.data[o + 2] = 40; }
+ctx.putImageData(img, 0, 0);
+</script></body></html>
