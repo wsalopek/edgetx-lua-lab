@@ -123,21 +123,34 @@ export class Lcd {
     this.line(Math.round(x1), Math.round(y1), Math.round(x2), Math.round(y2), pat, c);
   }
 
-  // Artificial-horizon "ground": fills the part of the box below the horizon line.
-  // The line passes through the box centre shifted by pitch, tilted by roll. (EdgeTX does this natively.)
+  // Artificial-horizon "ground". Direct port of drawHudRectangle() in EdgeTX radio/src/lua/api_colorlcd.cpp
+  // (C float->int conversions truncate toward zero, hence the Math.trunc calls).
   hudRect(pitch, roll, xmin, xmax, ymin, ymax, c) {
-    // ground = half-plane below the horizon in the aircraft frame: (x-cx)*sin(roll) + (y-cy)*cos(roll) > 0
-    const cx = (xmin + xmax) / 2, cy = (ymin + ymax) / 2 + pitch * ((ymax - ymin) / 50);
-    const sr = Math.sin((roll * Math.PI) / 180), cr = Math.cos((roll * Math.PI) / 180);
-    for (let y = ymin; y <= ymax; y++) {
-      const k = (y - cy) * cr; // ground where (x-cx)*sr + k > 0
-      let x0 = xmin, x1 = xmax;
-      if (Math.abs(sr) < 1e-9) { if (k <= 0) continue; }
-      else {
-        const xe = cx - k / sr; // boundary
-        if (sr > 0) x0 = Math.max(xmin, Math.floor(xe) + 1); else x1 = Math.min(xmax, Math.ceil(xe) - 1);
+    const G = 0.017453293, T = Math.trunc;
+    const dx = Math.sin(G * roll) * pitch, dy = Math.cos(G * roll) * pitch * 1.85;
+    const angle = Math.tan(-G * roll);
+    const ox = 0.5 * (xmin + xmax) + dx, oy = 0.5 * (ymin + ymax) + dy;
+    const ywidth = ymax - ymin;
+    const hline = (x, y, w) => { for (let i = 0; i < w; i++) this.pixel(x + i, y, c); };
+    const rect = (x, y, w, h) => { for (let j = 0; j < h; j++) hline(x, y + j, w); };
+    if (roll === 0) {
+      rect(xmin, Math.max(ymin, ymin + (T(ywidth / 2) + T(dy))), xmax - xmin, Math.max(0, Math.min(ywidth, T(ywidth / 2) - T(dy))));
+    } else if (Math.abs(roll) >= 180) {
+      rect(xmin, ymin, xmax - xmin, Math.min(ywidth, T(ywidth / 2) + T(Math.abs(dy))));
+    } else {
+      const inverted = Math.abs(roll) > 90;
+      let fillNeeded = false, ybot = inverted ? 0 : this.h;
+      for (let s = 0; s < ywidth; s++) {
+        const yy = ymin + s, xx = T(ox + (yy - oy) / angle);
+        if (roll > 0) {
+          if (xx >= xmin && xx <= xmax) hline(xx, yy, xmax - xx + 1);
+          else if (xx < xmin) { ybot = inverted ? Math.max(yy, ybot) + 1 : Math.min(yy, ybot); fillNeeded = true; }
+        } else {
+          if (xx >= xmin && xx <= xmax) hline(xmin, yy, xx - xmin);
+          else if (xx > xmax) { ybot = inverted ? Math.max(yy, ybot) + 1 : Math.min(yy, ybot); fillNeeded = true; }
+        }
       }
-      for (let x = x0; x <= x1; x++) this.pixel(x, y, c);
+      if (fillNeeded) rect(xmin, inverted ? ymin : ybot, xmax - xmin, inverted ? ybot - ymin : ymax - ybot);
     }
   }
 

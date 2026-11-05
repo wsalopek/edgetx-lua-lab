@@ -42,3 +42,9 @@ Underlying typeface: Roboto (Apache-2.0) in `radio/src/fonts/Roboto`.
 Companion 2.12 ships a simulator library for every radio. Use it to capture golden screenshots.
 Driving it without a mouse: post window messages to the simulator window and capture only that
 window (see tools/). The simulator window is drawn at 2/3 scale on some monitors.
+
+## Accuracy sources (no Companion needed)
+EdgeTX's own source is the reference: `radio/src/lua/api_colorlcd.cpp` (all `lcd.*` bindings) and `radio/src/gui/colorlcd/`.
+`lcd.hudRect()` is a direct port of `drawHudRectangle()` (pitch scale 1.85 px/degree). Step 6 (pixel diff against the Companion simulator)
+is parked: Companion needs its "SD structure path" profile setting pointing at a SD folder before the simulator will load Yaapu.
+Port the remaining `lcd.*` functions from that file rather than guessing.
