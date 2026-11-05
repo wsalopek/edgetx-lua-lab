@@ -23,7 +23,7 @@ export const ARG_NAMES = {
 };
 
 // Skip strings, comments and long brackets while scanning; calls fn(i, ch) for each "code" character; fn returning false stops.
-function scan(src, from, fn) {
+export function scan(src, from, fn) {
   let i = from;
   while (i < src.length) {
     const c = src[i];
@@ -145,8 +145,8 @@ export function functionEnd(src, fnStart) {
 }
 
 // insert a new statement at the end of the drawing function (refresh/run) or at the end of a plain script
-export function addStatement(src, statement) {
-  const m = /(?:function\s+(?:refresh|run)\s*\(|(?:refresh|run)\s*=\s*function\s*\()/.exec(src);
+export function addStatement(src, statement, where = /(?:function\s+(?:refresh|run)\s*\(|(?:refresh|run)\s*=\s*function\s*\()/) {
+  const m = where.exec(src);
   if (m) {
     const e = functionEnd(src, m.index);
     if (e > 0) {

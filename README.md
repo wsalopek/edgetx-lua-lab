@@ -25,10 +25,15 @@ GPL-3.0, matching EdgeTX and Yaapu. See `LICENSE`.
 
 See `docs/NOTES.md` for research notes and `docs/MILESTONE1.md` for the current plan.
 
-## Try it (no install; needs only Node to serve the files)
+## Easiest: one file, no install
+Open `dist/edgetx-lua-lab.html` in a browser (double-click). It contains everything: editor, Lua engine, fonts, API help.
+Rebuild it after changing the source with `node tools/build-single.mjs` (needs Node; uses `npx esbuild` only while building).
+
+## Or run from source (needs only Node to serve the files)
 ```
 node tools/serve.mjs 8130
 ```
 - `demo/editor.html` - write a widget / telemetry / plain script and see the simulated radio screen; radio keys + touchscreen input; **Design mode**: click/drag/resize things on the screen and the edits are written into your Lua code (or type code and watch the screen)
+- EdgeTX 2.11+ **LVGL** scripts (`lvgl.build`, `lvgl.label`, buttons, sliders, toggles, boxes with flex layout, arcs...) run too, and the Design mode drags them by rewriting their table fields (`x = ..., y = ...`). Template: "LVGL tool script". Not drawn yet: image, qrcode, pickers, pages, dialogs.
 - `demo/yaapu.html` - the real Yaapu widget flying on simulated ArduPilot telemetry
 - `demo/lab.html` - the original minimal editor prototype

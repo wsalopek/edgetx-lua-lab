@@ -41,6 +41,7 @@
  <button id="open">Open .lua&hellip;</button> <button id="save">Save .lua</button>
  <button id="undo" title="Ctrl+Z">&#8630; Undo</button><button id="redo" title="Ctrl+Y / Ctrl+Shift+Z">Redo &#8631;</button>
  <label><input type="checkbox" id="auto" checked> run as I type</label> <button id="run">Run (Ctrl+Enter)</button>
+ <label title="LVGL buttons, sliders and other controls only exist in tool scripts and full-screen widgets"><input type="checkbox" id="fs"> widget is full-screen</label>
  <span id="kind" style="color:#9cf"></span>
  <input type="file" id="file" accept=".lua,text/plain" hidden>
 </div>
@@ -51,7 +52,8 @@
   <div class="row"><span class="lbl">Mode</span><button id="m_run" class="on">Run: mouse = touchscreen</button><button id="m_des">Design: drag things on the screen</button></div>
   <div class="screen"><canvas id="lcd" width="480" height="272"></canvas><canvas id="ov" width="720" height="408" tabindex="0"></canvas></div>
   <div class="row"><span class="lbl">Radio keys</span><span id="keys"></span> <span id="evt" style="color:#888;font-size:12px"></span></div>
-  <div class="row" id="palrow"><span class="lbl">Add</span></div>
+  <div class="row" id="palrow"><span class="lbl">Add drawing</span></div>
+  <div class="row" id="palrow2"><span class="lbl">Add LVGL</span></div>
   <div id="insp">Design mode: click something on the screen to select it. Drag to move, drag the corner square to resize, arrow keys nudge. Changes are written into your code.</div>
   <details open><summary>Simulated telemetry sensors</summary><table id="sens"></table><button id="addsens">+ sensor</button></details>
   <details><summary>What this simulator supports</summary><div id="api"></div></details>
@@ -64,12 +66,13 @@ import { LuaHost } from '../src/host.js';
 import { KEYS, EVENTS } from '../src/events.js';
 import { SPEC, ARG_NAMES, findCall, patchArgs, moveItem, resizeItem, deleteItem, addStatement } from '../src/designer.js';
 const $ = (id) => document.getElementById(id);
-const fonts = await loadFonts(async (n) => (await fetch(`../src/fonts/${n}.json`)).json());
+const fonts = await loadFonts(async (n) => window.__EMBED ? window.__EMBED.fonts[n] : (await fetch(`../src/fonts/${n}.json`)).json());
 const lcd = new Lcd(480, 272, fonts), ctx = $('lcd').getContext('2d'), ov = $('ov'), octx = ov.getContext('2d');
 const S = 1.5; // screen pixels per radio pixel on this page
 import { highlight } from '../src/lua-syntax.js';
+import { lvglSites, matchSites, moveLvgl, resizeLvgl, deleteLvgl, addLvgl, setFields, LV_RESIZE, LV_NOMOVE, lvType } from '../src/designer-lvgl.js';
 // API knowledge for colouring and autocomplete: help text from EdgeTX's own source + what this simulator really implements
-const DOCS = await (await fetch('../src/api-docs.json')).json();
+const DOCS = window.__EMBED ? window.__EMBED.docs : await (await fetch('../src/api-docs.json')).json();
 const docBy = new Map(DOCS.map((d) => [d.name, d]));
 const GN = new LuaHost({ fengari: window.fengari, lcd: new Lcd(480, 272, fonts) }).globalNames();
 const IMPL = new Set(GN.funcs), KNOWN = new Set([...GN.funcs, ...DOCS.map((d) => d.name)]), CONSTS = new Set(GN.consts);
@@ -132,6 +135,49 @@ end
 
 return { init = init, run = run }
 `,
+ 'LVGL tool script (EdgeTX 2.11+)': `-- A tool script that builds its screen from lvgl objects (labels, buttons, sliders, boxes...).
+-- The radio draws these objects itself; you describe them once in init(). In Design mode you can drag them.
+local clicks, level = 0, 40
+
+local function init()
+  lvgl.build({
+    { type = "label", x = 20, y = 14, text = "LVGL demo", font = MIDSIZE },
+    { type = "label", x = 20, y = 56, text = function() return "clicks: " .. clicks end },
+    { type = "button", x = 20, y = 90, w = 120, h = 36, text = "Press me", press = function() clicks = clicks + 1 end },
+    { type = "slider", x = 20, y = 140, w = 220, h = 32, min = 0, max = 100, get = function() return level end, set = function(v) level = v end },
+    { type = "label", x = 20, y = 190, text = function() return "slider = " .. level end },
+    { type = "box", x = 280, y = 20, w = 180, h = 150, color = COLOR_THEME_SECONDARY2, flexFlow = lvgl.FLOW_COLUMN, children = {
+      { type = "label", text = "Inside a box" },
+      { type = "toggle", get = function() return clicks % 2 == 1 end, set = function(v) clicks = clicks + 1 end },
+    } },
+    { type = "arc", x = 300, y = 190, radius = 30, thickness = 8, startAngle = 0, endAngle = function() return level * 3.6 end, color = COLOR_THEME_ACTIVE, bgColor = COLOR_THEME_SECONDARY2, bgOpacity = 255 },
+  })
+end
+
+local function run(event, touchState)
+  if event == EVT_VIRTUAL_EXIT then return 2 end
+  return 0
+end
+
+return { init = init, run = run }
+`,
+ 'LVGL widget (EdgeTX 2.11+)': `-- A widget whose screen is made of lvgl objects. (Buttons and sliders only work in full-screen widgets: tick the box above.)
+local function create(zone, options)
+  lvgl.build({
+    { type = "rectangle", x = 0, y = 0, w = zone.w, h = zone.h, filled = true, color = COLOR_THEME_PRIMARY2 },
+    { type = "label", x = 16, y = 12, text = function() return string.format("RSSI %d", getValue("RSSI")) end, font = DBLSIZE, color = WHITE },
+    { type = "arc", x = 330, y = 20, radius = 60, thickness = 12, startAngle = 135, endAngle = function() return 135 + getValue("RSSI") * 2.7 end, color = GREEN, bgColor = COLOR_THEME_SECONDARY2, bgOpacity = 255 },
+    { type = "hline", x = 16, y = 70, w = 280, h = 2, color = WHITE },
+    { type = "label", x = 16, y = 84, text = "tap Design, then drag me", color = WHITE },
+  })
+  return { zone = zone }
+end
+
+local function update(widget, options) end
+local function refresh(widget, event, touchState) end
+
+return { name = "LvglGauge", options = {}, create = create, update = update, refresh = refresh }
+`,
  'Plain drawing script': `-- Runs once, top to bottom. Good for trying drawing functions.
 lcd.clear(COLOR_THEME_PRIMARY1)
 lcd.drawText(10, 10, "Hello EdgeTX", DBLSIZE + WHITE)
@@ -166,6 +212,8 @@ let host = null, kind = '', timer = null, badLine = 0, design = false, items = [
 window.__lab = { get items() { return items; }, get sel() { return sel; }, get host() { return host; } }; // for tests
 const queue = []; // events waiting for the next frame (EdgeTX delivers one per refresh)
 const status = (msg, cls = 'ok') => { $('status').className = cls; $('status').textContent = msg; };
+let note = '', noteUntil = 0;
+const flash = (msg) => { note = msg; noteUntil = performance.now() + 6000; status(msg, 'warn'); };
 const lineOf = (err) => { const m = /script:(\d+):/.exec(err || ''); return m ? +m[1] : 0; };
 const code = () => $('code').value;
 const refreshHl = () => { $('hl').innerHTML = highlight(code(), KNOWN, CONSTS) + '\n'; $('hl').scrollTop = $('code').scrollTop; $('hl').scrollLeft = $('code').scrollLeft; };
@@ -198,7 +246,9 @@ const paint = () => { ctx.putImageData(new ImageData(lcd.toRGBA(), 480, 272), 0,
 function fail(r, where) { clearInterval(timer); timer = null; badLine = lineOf(r.error); gutter(); status(`${where}: ${r.error}`, 'err'); }
 function report(extra = '') {
   const unsup = [...lcd.unsupported.keys()], log = host.log.slice(-6).join('\n');
-  status('running ' + kind + (extra ? ' - ' + extra : '') + (unsup.length ? '\nnot simulated yet (draws nothing): ' + unsup.join(', ') : '') + (log ? '\nprint(): ' + log : ''), unsup.length ? 'warn' : 'ok');
+  const lerr = host.lvglError();
+  if (note && performance.now() < noteUntil) { status(note + '\nrunning ' + kind, 'warn'); return; } // a recent warning stays visible for a few seconds
+  status('running ' + kind + (extra ? ' - ' + extra : '') + (lerr ? '\nlvgl callback error: ' + lerr : '') + (unsup.length ? '\nnot simulated yet (draws nothing): ' + unsup.join(', ') : '') + (log ? '\nprint(): ' + log : ''), unsup.length || lerr ? 'warn' : 'ok');
 }
 
 // ---- which call in the source made an on-screen item ----
@@ -210,8 +260,32 @@ function siteOf(it) { // index of the lcd.<fn>( call on that line whose literal 
   }
   return 0;
 }
-const keyOf = (it) => it && { line: it.line, fn: it.fn, nth: siteOf(it) };
-const same = (a, b) => a && b && a.line === b.line && a.fn === b.fn && a.nth === b.nth;
+// LVGL objects: matched to the table that defines them in the source (memoised per source text + frame)
+let lvMemo = { src: null, items: null, map: null };
+function lvMap() { const s = code(); if (lvMemo.src !== s || lvMemo.items !== items) lvMemo = { src: s, items, map: matchSites(lvglSites(s), items) }; return lvMemo.map; }
+const lvSite = (it) => (it && it.lv ? lvMap().get(it.id) : null);
+const lineAt = (idx) => code().slice(0, idx).split('\n').length;
+const keyOf = (it) => it && (it.lv ? { lv: true, id: it.id, fn: it.fn, nth: 0, line: lvSite(it) ? lineAt(lvSite(it).open) : it.line } : { line: it.line, fn: it.fn, nth: siteOf(it) });
+const same = (a, b) => a && b && (a.lv || b.lv ? !!a.lv && !!b.lv && a.id === b.id : a.line === b.line && a.fn === b.fn && a.nth === b.nth);
+const lvItem = (k) => items.find((i) => i.lv && i.id === k.id);
+let whyNot = '';
+// the source text after moving / resizing the selected thing (null when that cannot be done by editing a number)
+function applyMove(k, dx, dy) {
+  whyNot = '';
+  if (!k.lv) return moveItem(code(), k.line, k.fn, k.nth, dx, dy);
+  const it = lvItem(k), site = lvSite(it);
+  if (!site) { whyNot = 'I could not find where this object is defined in the code (its table is built some other way). Edit the code directly.'; return null; }
+  if (it.inFlex) { whyNot = 'This object sits in a box with flexFlow, which places it automatically. Move the box, or change the order in the code.'; return null; }
+  if (LV_NOMOVE.has(lvType(it))) { whyNot = 'Lines and triangles are placed by their point list (pts) - edit the points in the code.'; return null; }
+  return moveLvgl(code(), site, dx, dy);
+}
+function applyResize(k, dx, dy) {
+  whyNot = '';
+  if (!k.lv) return resizeItem(code(), k.line, k.fn, k.nth, dx, dy);
+  const it = lvItem(k), site = lvSite(it);
+  if (!site) { whyNot = 'I could not find where this object is defined in the code. Edit the code directly.'; return null; }
+  return resizeLvgl(code(), site, lvType(it), dx, dy, it.bbox[2], it.bbox[3]);
+}
 const selItem = () => sel && items.find((it) => same(keyOf(it), sel));
 
 // ---- running ----
@@ -229,9 +303,11 @@ function run() {
   lcd.unsupported.clear(); lcd.clear(0); queue.length = 0;
   host = new LuaHost({ fengari: window.fengari, lcd, telemetry: { ...sensors }, modelName: 'Simulated' });
   host.record = true; items = [];
+  host.lvglFullscreen(true); // while the script's top level runs; narrowed below once we know it is a widget
   const m = host.loadModuleText(code(), '=script');
   if (!m.ok) { paint(); return fail(m, 'error'); }
   kind = m.kind; $('kind').textContent = kind === 'plain' ? 'plain script' : kind + ' script';
+  host.lvglFullscreen(kind !== 'widget' || $('fs').checked);
   gutter();
   if (kind === 'widget') {
     const c = host.newInstance('w', { w: 480, h: 272 }, {}); if (!c.ok) return fail(c, 'create() error');
@@ -239,7 +315,7 @@ function run() {
   } else if (kind === 'telemetry') {
     const i = host.callTelemetry('init'); if (!i.ok) return fail(i, 'init() error');
     if (frame()) timer = setInterval(frame, 50);
-  } else { host.items = []; host.record = true; const r = host.exec(code(), '=script'); if (!r.ok) return fail(r, 'error'); items = host.items; paint(); report('ran once'); }
+  } else { host.items = []; host.record = true; const r = host.exec(code(), '=script'); if (!r.ok) return fail(r, 'error'); const d = host.drawLvgl(); if (!d.ok) return fail(d, 'lvgl error'); items = host.items; paint(); report('ran once'); }
 }
 let deb = 0;
 const rerun = () => { clearTimeout(deb); run(); };
@@ -331,7 +407,7 @@ document.addEventListener('keydown', (e) => {
   if (design && sel && e.key.startsWith('Arrow')) {
     e.preventDefault(); const st = e.shiftKey ? 10 : 1;
     const dx = { ArrowLeft: -st, ArrowRight: st }[e.key] || 0, dy = { ArrowUp: -st, ArrowDown: st }[e.key] || 0;
-    commit(moveItem(code(), sel.line, sel.fn, sel.nth, dx, dy)); return;
+    commit(applyMove(sel, dx, dy)); return;
   }
   if (design && sel && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); doDelete(); return; }
   const map = { Enter: ['ENTER', EVENTS.EVT_VIRTUAL_ENTER], Escape: ['EXIT', EVENTS.EVT_VIRTUAL_EXIT], Backspace: ['EXIT', EVENTS.EVT_VIRTUAL_EXIT], PageUp: ['PAGE<', EVENTS.EVT_VIRTUAL_PREV_PAGE],
@@ -343,7 +419,7 @@ document.addEventListener('keydown', (e) => {
 const pos = (e) => { const r = ov.getBoundingClientRect(); return [Math.round(((e.clientX - r.left) / r.width) * 480), Math.round(((e.clientY - r.top) / r.height) * 272)]; };
 const hit = (x, y) => { for (let i = items.length - 1; i >= 0; i--) { const [bx, by, bw, bh] = items[i].bbox; if (x >= bx - 2 && x <= bx + bw + 2 && y >= by - 2 && y <= by + bh + 2) return items[i]; } return null; };
 const handleOf = (it) => { const [bx, by, bw, bh] = it.bbox; return [bx + bw, by + bh]; };
-const resizable = (it) => it && SPEC[it.fn] && (SPEC[it.fn].size || SPEC[it.fn].radius !== undefined);
+const resizable = (it) => it && (it.lv ? !!LV_RESIZE[lvType(it)] : SPEC[it.fn] && (SPEC[it.fn].size || SPEC[it.fn].radius !== undefined));
 let touch = null; // run-mode touch gesture
 ov.addEventListener('pointerdown', (e) => {
   ov.focus(); ov.setPointerCapture(e.pointerId); const [x, y] = pos(e);
@@ -352,9 +428,10 @@ ov.addEventListener('pointerdown', (e) => {
     if (cur && resizable(cur)) { const [hx, hy] = handleOf(cur); if (Math.abs(x - hx) <= 5 && Math.abs(y - hy) <= 5) { drag = { mode: 'size', x0: x, y0: y, dx: 0, dy: 0, key: sel }; return; } }
     const h = hit(x, y);
     sel = h ? keyOf(h) : null; showInspector(); gutter(); overlay();
-    if (h && SPEC[h.fn]) drag = { mode: 'move', x0: x, y0: y, dx: 0, dy: 0, key: sel };
+    if (h && (h.lv || SPEC[h.fn])) drag = { mode: 'move', x0: x, y0: y, dx: 0, dy: 0, key: sel };
   } else {
     touch = { x0: x, y0: y, t0: performance.now(), slid: false, sx: 0, sy: 0 };
+    if (host && kind !== 'plain') host.lvglTouch('down', x, y);
     send('touch down', EVENTS.EVT_TOUCH_FIRST, { x, y, tapCount: touch.tapCount || 0 });
   }
 });
@@ -362,6 +439,7 @@ ov.addEventListener('pointermove', (e) => {
   const [x, y] = pos(e);
   if (design && drag) { drag.dx = x - drag.x0; drag.dy = y - drag.y0; overlay(); }
   else if (!design && touch) {
+    if (host && kind !== 'plain') host.lvglTouch('move', x, y);
     if (Math.abs(x - touch.x0) > 4 || Math.abs(y - touch.y0) > 4) touch.slid = true;
     if (touch.slid) {
       const last = queue[queue.length - 1];
@@ -374,9 +452,10 @@ ov.addEventListener('pointerup', (e) => {
   const [x, y] = pos(e);
   if (design && drag) {
     const d = drag; drag = null;
-    if (d.dx || d.dy) commit(d.mode === 'move' ? moveItem(code(), d.key.line, d.key.fn, d.key.nth, d.dx, d.dy) : resizeItem(code(), d.key.line, d.key.fn, d.key.nth, d.dx, d.dy));
+    if (d.dx || d.dy) commit(d.mode === 'move' ? applyMove(d.key, d.dx, d.dy) : applyResize(d.key, d.dx, d.dy));
     else overlay();
   } else if (!design && touch) {
+    if (host && kind !== 'plain') host.lvglTouch('up', x, y);
     const tp = performance.now() - touch.t0 < 400 && !touch.slid;
     touch.tapCount = tp ? ((performance.now() - (touch.lastTap || 0) < 400 ? (touch.n || 0) + 1 : 1)) : 0;
     send('touch up', EVENTS.EVT_TOUCH_BREAK, { x, y, tapCount: touch.tapCount });
@@ -387,12 +466,14 @@ ov.addEventListener('pointerup', (e) => {
 
 // ---- applying visual edits to the source ----
 function commit(newSrc) {
-  if (newSrc === null || newSrc === undefined) { status('That value is computed in a way I cannot edit visually - change it in the code.', 'warn'); overlay(); return; }
+  if (newSrc === null || newSrc === undefined) { flash(whyNot || 'That value is computed in a way I cannot edit visually - change it in the code.'); whyNot = ''; overlay(); return; }
   setCode(newSrc); run(); showInspector();
 }
 function doDelete() {
-  const r = deleteItem(code(), sel.line, sel.fn, sel.nth);
-  if (r === null) { status('Cannot delete: that call shares its line with other code. Edit the code directly.', 'warn'); return; }
+  let r;
+  if (sel.lv) { const site = lvSite(lvItem(sel)); r = site ? deleteLvgl(code(), site) : null; }
+  else r = deleteItem(code(), sel.line, sel.fn, sel.nth);
+  if (r === null) { flash('Cannot delete: that object shares its line with other code, or I cannot find it in the code. Edit the code directly.'); return; }
   sel = null; setCode(r); run(); showInspector();
 }
 const PALETTE = {
@@ -407,10 +488,45 @@ for (const [label, stmt] of Object.entries(PALETTE)) {
   $('palrow').appendChild(b);
 }
 
+// LVGL objects: added to the script's lvgl.build({...}) table (or create()/init() when there is none)
+const LV_PALETTE = {
+  Label: ['label', { x: 20, y: 20, text: '"Label"' }], Button: ['button', { x: 20, y: 60, w: 110, h: 36, text: '"Button"', press: 'function() end' }],
+  Toggle: ['toggle', { x: 150, y: 60, w: 52, h: 32, get: 'function() return false end', set: 'function(v) end' }],
+  Slider: ['slider', { x: 20, y: 110, w: 200, h: 32, min: 0, max: 100, get: 'function() return 50 end', set: 'function(v) end' }],
+  Rectangle: ['rectangle', { x: 240, y: 60, w: 100, h: 50, filled: 'true', color: 'COLOR_THEME_SECONDARY2' }],
+  Circle: ['circle', { x: 360, y: 60, radius: 30, filled: 'true', color: 'COLOR_THEME_ACTIVE' }],
+  Arc: ['arc', { x: 360, y: 140, radius: 40, thickness: 8, startAngle: 0, endAngle: 270, color: 'COLOR_THEME_ACTIVE' }],
+  Box: ['box', { x: 240, y: 130, w: 100, h: 90, color: 'COLOR_THEME_SECONDARY2' }],
+  Line: ['hline', { x: 20, y: 170, w: 200, h: 2, color: 'COLOR_THEME_SECONDARY1' }],
+};
+for (const [label, [type, params]] of Object.entries(LV_PALETTE)) {
+  const b = document.createElement('button'); b.textContent = '+ ' + label; b.style.padding = '3px 7px';
+  b.onclick = () => {
+    const r = addLvgl(code(), type, params); setCode(r.src); run(); setDesign(true);
+    const it = items.find((i) => i.lv && lvType(i) === type && i.p0.x === params.x && i.p0.y === params.y);
+    sel = it ? keyOf(it) : null; showInspector(); gutter(); overlay();
+    if (!it) flash('Added to the code, but it is not on screen (controls need a tool script or a full-screen widget).');
+  };
+  $('palrow2').appendChild(b);
+}
+
 // ---- inspector ----
+function showLvInspector(it) {
+  const site = lvSite(it);
+  if (!site) { $('insp').innerHTML = `<b>${it.fn}</b> - I could not find where this object is defined in the code (its table is built some other way), so it cannot be edited visually.`; return; }
+  sel.line = lineAt(site.open);
+  const keys = [...Object.keys(site.fields).filter((k) => k !== 'type' && k !== 'children'), ...['x', 'y'].filter((k) => !site.fields[k] && !LV_NOMOVE.has(lvType(it)) && !it.inFlex)];
+  $('insp').innerHTML = `<b>${it.fn}</b> on line ${sel.line} <button id="i_del" style="padding:1px 8px">Delete</button> <button id="i_go" style="padding:1px 8px">Show in code</button>` +
+    (it.inFlex ? '<div style="color:#fc6">Placed automatically by its box (flexFlow): drag the box, not this.</div>' : '') + '<table>' +
+    keys.map((k) => `<tr><td>${k}</td><td><input data-k="${k}" value="${(site.fields[k]?.text ?? '').replace(/"/g, '&quot;')}" placeholder="(not set)"></td></tr>`).join('') + '</table>';
+  $('i_del').onclick = doDelete;
+  $('i_go').onclick = () => { const ta = $('code'); const ls = code().split('\n'); let off = 0; for (let i = 0; i < sel.line - 1; i++) off += ls[i].length + 1; ta.focus(); ta.setSelectionRange(off, off + ls[sel.line - 1].length); ta.scrollTop = (sel.line - 5) * 19.5; };
+  for (const inp of $('insp').querySelectorAll('input')) inp.onchange = () => { if (inp.value.trim() !== '') commit(setFields(code(), site, { [inp.dataset.k]: inp.value.trim() })); };
+}
 function showInspector() {
   const it = selItem();
   if (!sel || !it) { $('insp').textContent = sel ? `Selected line ${sel.line} (not drawn this frame)` : 'Design mode: click something on the screen to select it. Drag to move, drag the corner square to resize, arrow keys nudge. Changes are written into your code.'; return; }
+  if (it.lv) return showLvInspector(it);
   const call = findCall(code(), sel.line, sel.fn, sel.nth); if (!call) { $('insp').textContent = 'Cannot find the call in the code.'; return; }
   const names = ARG_NAMES[sel.fn] || [];
   $('insp').innerHTML = `<b>lcd.${sel.fn}</b> on line ${sel.line} <button id="i_del" style="padding:1px 8px">Delete</button> <button id="i_go" style="padding:1px 8px">Show in code</button><table>` +

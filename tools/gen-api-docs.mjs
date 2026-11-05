@@ -5,12 +5,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const FILES = ['api_colorlcd', 'api_general', 'api_model', 'api_filesystem'];
+const FILES = ['api_colorlcd', 'api_colorlcd_lvgl', 'api_general', 'api_model', 'api_filesystem'];
 const out = [];
 for (const f of FILES) {
   const url = `https://raw.githubusercontent.com/EdgeTX/edgetx/main/radio/src/lua/${f}.cpp`;
   const text = await (await fetch(url)).text();
-  for (const m of text.matchAll(/\/\*luadoc\s*\n@function ([^\n]+)\n([\s\S]*?)\*\//g)) {
+  for (const m of text.matchAll(/\/\*luadoc\s*\n\s*@function ([^\n]+)\n([\s\S]*?)\*\//g)) {
     const head = /^([\w.]+)\s*\(([^)]*)\)/.exec(m[1].trim()); if (!head) continue;
     const body = m[2].split('\n');
     const para = [], params = []; let started = false, done = false;

@@ -1,6 +1,7 @@
 // Lua host: runs EdgeTX Lua scripts on Fengari (Lua 5.3) with a simulated radio API.
 // Works in the browser (global `fengari` from vendor/fengari/fengari-web.js) and in Node (tests).
 import { EVENTS } from './events.js';
+import { LVGL_LUA } from './lvgl.js';
 import { FLAGS, COLOR_INDEX, THEME_COLOR_COUNT, colorToFlags, rgb565, Bitmap } from './lcd.js';
 
 const norm = (p) => {
@@ -95,7 +96,40 @@ export class LuaHost {
     this._installBitmap();
     const r = this.exec(SHIMS, '=shims');
     if (!r.ok) throw new Error('shim error: ' + r.error);
+    this._installLvgl();
   }
+
+  // ---- lvgl (EdgeTX 2.11+ retained UI objects): the object tree lives in Lua, painted by drawLvgl() after each frame ----
+  _installLvgl() {
+    const { lua, lauxlib, to_jsstring } = this.f; const L = this.L;
+    this.lvItems = new Map(); this.lvCur = null;
+    this._def(null, '__unsupported', () => { this.lcd.noteUnsupported(to_jsstring(lauxlib.luaL_checkstring(L, 1))); return 0; });
+    this._def(null, '__lvgl_item', () => {
+      const n = (i) => Math.trunc(lua.lua_tonumber(L, i));
+      const it = { fn: 'lvgl.' + to_jsstring(lua.lua_tostring(L, 2)), lv: true, id: n(1), line: n(7), args: [], bbox: [n(3), n(4), n(5), n(6)], p0: {}, inFlex: !!lua.lua_toboolean(L, 8) };
+      this.lvCur = it; this.lvItems.set(it.id, it); return 0;
+    });
+    this._def(null, '__lvgl_field', () => {
+      const k = to_jsstring(lua.lua_tostring(L, 2)); const t = lua.lua_type(L, 3);
+      const v = t === lua.LUA_TNUMBER ? lua.lua_tonumber(L, 3) : t === lua.LUA_TBOOLEAN ? !!lua.lua_toboolean(L, 3) : to_jsstring(lua.lua_tostring(L, 3));
+      const it = this.lvItems.get(Math.trunc(lua.lua_tonumber(L, 1))); if (it) it.p0[k] = v; return 0;
+    });
+    const r = this.exec(LVGL_LUA, '=lvgl');
+    if (!r.ok) throw new Error('lvgl prelude error: ' + r.error);
+  }
+  // true when the script made any lvgl objects
+  hasLvgl() { return this.evalString('lvgl.__count()').value !== '0'; }
+  lvglFullscreen(b) { this.exec('lvgl.__setFull(' + (b ? 'true' : 'false') + ')', '=lvgl'); }
+  lvglError() { const v = this.evalString('lvgl.lastError'); return v.ok && v.value !== 'nil' ? v.value : null; }
+  // paint the lvgl tree on top of whatever the script drew with lcd.*; adds one item per object for the visual designer
+  drawLvgl() {
+    if (!this.hasLvgl()) return { ok: true };
+    this.lvItems = new Map();
+    const r = this.exec('lvgl.__draw()', '=lvgl');
+    if (this.record) for (const it of this.lvItems.values()) this.items.push(it);
+    return r;
+  }
+  lvglTouch(kind, x, y) { return this.exec('lvgl.__touch(' + JSON.stringify(kind) + ',' + (x | 0) + ',' + (y | 0) + ')', '=lvgl'); }
 
   // ---- small fengari helpers ----
   get S() { return this.f.to_luastring; }
@@ -179,7 +213,10 @@ export class LuaHost {
   // run a telemetry-script function: init() or run(event) / background()
   callTelemetry(fn, event = null, touch = null) {
     const a = fn === 'run' ? (this._ev(event === null ? 0 : event) + ', ' + this._touch(touch)) : '';
-    return this.exec("if __widgetModule." + fn + " then local r = __widgetModule." + fn + "(" + a + ") if r == 2 then __done = true end end", '=' + fn);
+    if (fn === 'run' && this.hasLvgl()) this.lcd.clear(this.lcd.resolve(colorToFlags(COLOR_INDEX.SECONDARY3))); // lvgl scripts get the theme background
+    const r = this.exec("if __widgetModule." + fn + " then local r = __widgetModule." + fn + "(" + a + ") if r == 2 then __done = true end end", '=' + fn);
+    if (r.ok && fn === 'run') { const d = this.drawLvgl(); if (!d.ok) return d; }
+    return r;
   }
 
   // EdgeTX can show the same widget on several screens; each gets its own create() but they share script state.
@@ -193,7 +230,10 @@ export class LuaHost {
       __instances[${JSON.stringify(id)}] = __widgetModule.create({ x = 0, y = 0, w = ${zone.w}, h = ${zone.h} }, o)`, '=create');
   }
   callWidget(fn = 'refresh', id = 'default', event = null, touch = null) {
-    return this.exec("local w = __instances[" + JSON.stringify(id) + "]; if __widgetModule." + fn + " then __widgetModule." + fn + "(w, " + this._ev(event) + ", " + this._touch(touch) + ") end", '=' + fn);
+    if (fn === 'refresh' && this.hasLvgl()) this.lcd.clear(this.lcd.resolve(colorToFlags(COLOR_INDEX.SECONDARY3)));
+    const r = this.exec("local w = __instances[" + JSON.stringify(id) + "]; if __widgetModule." + fn + " then __widgetModule." + fn + "(w, " + this._ev(event) + ", " + this._touch(touch) + ") end", '=' + fn);
+    if (r.ok && fn === 'refresh') { const d = this.drawLvgl(); if (!d.ok) return d; }
+    return r;
   }
   _ev(e) { return e == null ? 'nil' : String(e | 0); }
   _touch(t) { return t ? '{' + Object.entries(t).map(([k, v]) => k + '=' + (typeof v === 'boolean' ? v : Number(v) | 0)).join(',') + '}' : 'nil'; }
