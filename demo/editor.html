@@ -26,6 +26,15 @@
  #ov{background:transparent;outline:none}
  #status{font:12px Consolas,monospace;white-space:pre-wrap;min-height:34px;margin:6px 0;max-width:720px}
  .err{color:#f88}.ok{color:#8d8}.warn{color:#eb6}
+ #files{width:210px;height:520px;border:1px solid #444;background:#181818;display:flex;flex-direction:column;font-size:12px}
+ #files[hidden]{display:none}
+ #files .hd{padding:6px 8px;border-bottom:1px solid #333;display:flex;flex-direction:column;gap:5px}
+ #files .hd b{color:#9cf;word-break:break-all} #files select,#files input[type=text]{width:100%;box-sizing:border-box;font-size:12px;padding:2px 4px;background:#111;color:#cfe;border:1px solid #444}
+ #tree{flex:1;overflow:auto;padding:4px 0;font:12px Consolas,monospace}
+ #tree details{margin:0 0 0 10px} #tree summary{color:#aaa;cursor:pointer;padding:1px 4px}
+ #tree .f{padding:1px 6px 1px 14px;cursor:pointer;white-space:nowrap;color:#cbd} #tree .f:hover{background:#262626} #tree .f.cur{background:#27518f;color:#fff}
+ #tree .f.img{color:#666;cursor:default} #tree .f.dirty:after{content:" \25CF";color:#f0a050}
+ #files .ft{padding:6px 8px;border-top:1px solid #333;display:flex;flex-direction:column;gap:5px}
  .side{width:724px} .row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;align-items:center}
  .row span.lbl{color:#999;font-size:12px;min-width:62px}
  table{border-collapse:collapse;font-size:12px} td{padding:1px 6px 1px 0} input.t{width:90px;background:#222;color:#ddd;border:1px solid #444;padding:1px 4px}
@@ -40,6 +49,8 @@
  <select id="tpl"></select> <button id="load">Load template</button>
  <select id="scr" title="Which radio screen to simulate (fonts and sizes follow the real firmware)"></select>
  <button id="open">Open .lua&hellip;</button> <button id="save">Save .lua</button>
+ <button id="openfolder" title="Open a widget folder or a whole SD card folder: edit all its files and see the result live">Open folder&hellip;</button>
+ <input type="file" id="dirpick" webkitdirectory hidden>
  <button id="undo" title="Ctrl+Z">&#8630; Undo</button><button id="redo" title="Ctrl+Y / Ctrl+Shift+Z">Redo &#8631;</button>
  <label><input type="checkbox" id="auto" checked> run as I type</label> <button id="run">Run (Ctrl+Enter)</button>
  <label title="LVGL buttons, sliders and other controls only exist in tool scripts and full-screen widgets"><input type="checkbox" id="fs"> widget is full-screen</label>
@@ -47,6 +58,15 @@
  <input type="file" id="file" accept=".lua,text/plain" hidden>
 </div>
 <div class="main">
+ <div id="files" hidden>
+  <div class="hd"><div><b id="fname"></b></div>
+   <label>Runs <select id="entry"></select></label>
+   <div style="display:flex;gap:6px"><button id="saveall" style="padding:2px 8px">Save all</button><button id="closefolder" style="padding:2px 8px">Close folder</button></div></div>
+  <div id="tree"></div>
+  <div class="ft"><label>Widget options (JSON)<input type="text" id="wopts" value="{}"></label>
+   <label><input type="checkbox" id="flight"> simulate ArduPilot flight telemetry</label>
+   <label>Page <select id="page"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label></div>
+ </div>
  <div><div class="ed"><div id="gutter"></div><div class="codewrap"><pre id="hl"></pre><textarea id="code" spellcheck="false" wrap="off"></textarea><div id="ac"></div></div></div>
   <div id="phelp"></div><div id="status"></div></div>
  <div class="side">
@@ -56,6 +76,7 @@
   <div class="row" id="palrow"><span class="lbl">Add drawing</span></div>
   <div class="row" id="palrow2"><span class="lbl">Add LVGL</span></div>
   <div id="insp">Design mode: click something on the screen to select it. Drag to move, drag the corner square to resize, arrow keys nudge. Changes are written into your code.</div>
+  <details id="flightbox"><summary>Simulated flight (ArduPilot telemetry)</summary><div id="fctl" style="display:grid;grid-template-columns:110px 1fr 50px;gap:2px 8px;align-items:center"></div> <button id="armb">Disarm</button> <button id="msgb">Send a message</button></details>
   <details open><summary>Simulated telemetry sensors</summary><table id="sens"></table><button id="addsens">+ sensor</button></details>
   <details><summary>What this simulator supports</summary><div id="api"></div></details>
  </div>
@@ -66,6 +87,8 @@ import { Lcd, loadFonts } from '../src/lcd.js';
 import { LuaHost } from '../src/host.js';
 import { KEYS, EVENTS } from '../src/events.js';
 import { SCREENS, DEFAULT_SCREEN } from '../src/screens.js';
+import { buildMount, chunkId, readDirectory, readFileList } from '../src/folder.js';
+import { Passthrough, feed, FLIGHT_SLIDERS } from '../src/passthrough.js';
 import { SPEC, ARG_NAMES, findCall, patchArgs, moveItem, resizeItem, deleteItem, addStatement } from '../src/designer.js';
 const $ = (id) => document.getElementById(id);
 // EdgeTX builds a different font set per screen (std / sml / lrg); load each one the first time it is needed
@@ -249,6 +272,7 @@ function goHist(d) {
 $('undo').onclick = () => goHist(-1); $('redo').onclick = () => goHist(1);
 document.addEventListener('keydown', (e) => {
   if (!(e.ctrlKey || e.metaKey)) return; const k = e.key.toLowerCase();
+  if (k === 's') { e.preventDefault(); $('save').click(); return; }
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); goHist(-1); } else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); goHist(1); }
 }, true);
 
@@ -304,37 +328,52 @@ function applyResize(k, dx, dy) {
 const selItem = () => sel && items.find((it) => same(keyOf(it), sel));
 
 // ---- running ----
+// ---- folder mode: a whole widget / SD card folder is open; `folder.docs` holds every text file, `cur` is the one in the editor ----
+let folder = null, cur = null, fc = 0;
+const pt = new Passthrough();
+const instId = () => { if (!folder) return 'w'; const id = +$('page').value === 1 ? 'default' : 'p' + $('page').value; return host.instances.has(id) ? id : 'default'; };
+function syncCur() { if (folder && cur) { const d = folder.docs.get(cur); if (d) { d.text = code(); markDirty(d); } } }
 function frame() {
   host.items = []; host.record = true; lcd.unsupported.clear?.call;
   const ev = queue.shift();
   const e = ev ? ev.event : null, t = ev ? ev.touch : null;
   if (ev) $('evt').textContent = ev.name + (t ? ` (${t.x},${t.y})` : '');
-  const r = kind === 'widget' ? host.callWidget('refresh', 'w', e, t) : host.callTelemetry('run', e === null ? 0 : e, t);
+  if (folder && kind === 'widget') { // EdgeTX also calls background() on widgets; Yaapu does its telemetry decoding there
+    if ($('flight').checked && ++fc % 6 === 1) feed(host, pt);
+    const b = host.callWidget('background', 'default'); if (!b.ok) { fail(b, 'background() error'); return false; }
+  }
+  const r = kind === 'widget' ? host.callWidget('refresh', instId(), e, t) : host.callTelemetry('run', e === null ? 0 : e, t);
   if (!r.ok) { fail(r, (kind === 'widget' ? 'refresh()' : 'run()') + ' error'); return false; }
   items = host.items; paint(); report(); return true;
 }
 function run() {
-  clearInterval(timer); badLine = 0; localStorage.setItem('lab.script', code());
-  lcd.unsupported.clear(); lcd.clear(0); queue.length = 0;
-  host = new LuaHost({ fengari: window.fengari, lcd, telemetry: { ...sensors }, modelName: 'Simulated' });
+  clearInterval(timer); badLine = 0;
+  if (folder) syncCur(); else localStorage.setItem('lab.script', code());
+  lcd.unsupported.clear(); lcd.clear(0); queue.length = 0; fc = 0;
+  const files = folder ? Object.fromEntries([...folder.docs.values()].map((d) => [d.path, d.text])) : undefined;
+  host = new LuaHost({ fengari: window.fengari, lcd, files, bitmaps: folder ? folder.bitmaps : undefined, telemetry: { ...sensors }, modelName: 'Simulated' });
   host.record = true; items = [];
+  host.recordChunk = folder ? chunkId(cur) : 'script'; // design mode edits the file that is open in the editor
   host.lvglFullscreen(true); // while the script's top level runs; narrowed below once we know it is a widget
-  const m = host.loadModuleText(code(), '=script');
+  const entryText = folder ? folder.docs.get(folder.entry).text : code(), chunk = folder ? '@' + folder.entry : '=script';
+  const m = host.loadModuleText(entryText, chunk);
   if (!m.ok) { paint(); return fail(m, 'error'); }
-  kind = m.kind; $('kind').textContent = kind === 'plain' ? 'plain script' : kind + ' script';
+  kind = m.kind; $('kind').textContent = (kind === 'plain' ? 'plain script' : kind + ' script') + (folder ? ' (' + folder.entry + ')' : '');
   host.lvglFullscreen(kind !== 'widget' || $('fs').checked);
   gutter();
   if (kind === 'widget') {
-    const c = host.newInstance('w', { w: W, h: H }, {}); if (!c.ok) return fail(c, 'create() error');
+    let opts = {}; try { opts = folder ? JSON.parse($('wopts').value || '{}') : {}; } catch (e) { return fail({ error: 'Widget options are not valid JSON: ' + e.message }, 'options'); }
+    const c = host.newInstance(folder ? 'default' : 'w', { w: W, h: H }, opts); if (!c.ok) return fail(c, 'create() error');
+    if (folder && /yaapu/i.test(folder.name)) for (let p = 2; p <= 4; p++) { const c2 = host.newInstance('p' + p, { w: W, h: H }, { ...opts, 'Screen Type': p }); if (!c2.ok) return fail(c2, 'create() error'); }
     if (frame()) timer = setInterval(frame, 50);
   } else if (kind === 'telemetry') {
     const i = host.callTelemetry('init'); if (!i.ok) return fail(i, 'init() error');
     if (frame()) timer = setInterval(frame, 50);
-  } else { host.items = []; host.record = true; const r = host.exec(code(), '=script'); if (!r.ok) return fail(r, 'error'); const d = host.drawLvgl(); if (!d.ok) return fail(d, 'lvgl error'); items = host.items; paint(); report('ran once'); }
+  } else { host.items = []; host.record = true; const r = host.exec(entryText, chunk); if (!r.ok) return fail(r, 'error'); const d = host.drawLvgl(); if (!d.ok) return fail(d, 'lvgl error'); items = host.items; paint(); report('ran once'); }
 }
 let deb = 0;
 const rerun = () => { clearTimeout(deb); run(); };
-function onEdit() { refreshHl(); gutter(); recordSoon(); updUndo(); if ($('auto').checked) { clearTimeout(deb); deb = setTimeout(run, 350); } }
+function onEdit() { if (folder) syncCur(); refreshHl(); gutter(); recordSoon(); updUndo(); if ($('auto').checked) { clearTimeout(deb); deb = setTimeout(run, 350); } }
 $('code').addEventListener('input', () => { onEdit(); showAc(); paramHelp(); });
 $('code').addEventListener('scroll', () => { $('gutter').scrollTop = $('hl').scrollTop = $('code').scrollTop; $('hl').scrollLeft = $('code').scrollLeft; hideAc(); });
 $('code').addEventListener('click', () => { hideAc(); paramHelp(); });
@@ -404,8 +443,88 @@ $('code').addEventListener('keydown', (e) => {
 });
 $('run').onclick = run;
 $('load').onclick = () => { setCode(TEMPLATES[$('tpl').value]); sel = null; run(); };
-$('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([code()], { type: 'text/plain' })); a.download = 'script.lua'; a.click(); };
+const download = (name, text) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' })); a.download = name; a.click(); };
+$('save').onclick = () => (folder ? saveDoc(folder.docs.get(cur)) : download('script.lua', code()));
 $('open').onclick = () => $('file').click();
+
+// ---- folder mode UI ----
+const decodePng = async (blob) => {
+  const bmp = await createImageBitmap(blob, { premultiplyAlpha: 'none' });
+  const c = new OffscreenCanvas(bmp.width, bmp.height), g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+  return { w: bmp.width, h: bmp.height, rgba: g.getImageData(0, 0, bmp.width, bmp.height).data };
+};
+const markDirty = (d) => { d.dirty = d.text !== d.saved; const row = $('tree').querySelector(`[data-path="${CSS.escape(d.path)}"]`); if (row) row.classList.toggle('dirty', d.dirty); };
+function renderTree() {
+  const root = {};
+  for (const d of folder.docs.values()) d.rel.split('/').reduce((o, p, i, a) => (i === a.length - 1 ? (o[p] = d) : (o[p] ||= {})), root);
+  for (const p of Object.keys(folder.bitmaps)) p.slice(folder.mount.length).split('/').reduce((o, n, i, a) => (i === a.length - 1 ? (o[n] = { image: true }) : (o[n] ||= {})), root);
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const html = (o, open) => Object.keys(o).sort((a, b) => (!!o[b].path - !!o[a].path) || (o[a].image ? 1 : 0) - (o[b].image ? 1 : 0) || a.localeCompare(b)).map((k) => {
+    const v = o[k];
+    if (v.path) return `<div class="f${v.path === cur ? ' cur' : ''}${v.dirty ? ' dirty' : ''}" data-path="${esc(v.path)}">${esc(k)}</div>`;
+    if (v.image) return `<div class="f img">${esc(k)}</div>`;
+    return `<details${open ? ' open' : ''}><summary>${esc(k)}</summary>${html(v, false)}</details>`;
+  }).join('');
+  $('tree').innerHTML = html(root, true);
+  for (const el of $('tree').querySelectorAll('.f[data-path]')) el.onclick = () => openDoc(el.dataset.path);
+}
+function openDoc(path) {
+  const d = folder.docs.get(path); if (!d || path === cur) return;
+  syncCur(); const old = folder.docs.get(cur); if (old) old.hist = { stack: hist.stack, idx: hist.idx };
+  cur = path; clearTimeout(recT); $('code').value = d.text; $('code').scrollTop = 0;
+  hist.stack = d.hist ? d.hist.stack : [d.text]; hist.idx = d.hist ? d.hist.idx : 0;
+  sel = null; hideAc(); refreshHl(); gutter(); updUndo(); renderTree(); run(); showInspector();
+}
+function loadFolder(name, entries) {
+  const m = buildMount(name, entries);
+  if (!m.entry) { status('No .lua files found in that folder.', 'warn'); return; }
+  if (!folder) localStorage.setItem('lab.script', code()); // the scratch script comes back when the folder is closed
+  folder = { ...m, docs: new Map(m.docs.map((d) => [d.path, { ...d, saved: d.text, dirty: false }])) };
+  cur = m.entry; const yaapu = /yaapu/i.test(name);
+  $('files').hidden = false; $('fname').textContent = name; $('fname').title = 'mounted as ' + m.mount;
+  $('entry').innerHTML = m.candidates.map((p) => `<option value="${p}">${p.replace(/^\/(WIDGETS|SCRIPTS)\//, '')}</option>`).join(''); $('entry').value = m.entry;
+  $('wopts').value = yaapu ? '{"Screen Type":1}' : '{}'; $('flight').checked = yaapu; $('flightbox').open = yaapu;
+  $('save').textContent = 'Save file'; $('save').title = 'Ctrl+S: write this file back into the folder';
+  const d = folder.docs.get(cur); $('code').value = d.text; $('code').scrollTop = 0; hist.stack = [d.text]; hist.idx = 0;
+  sel = null; refreshHl(); renderTree(); updUndo(); run(); showInspector();
+}
+function closeFolder() {
+  if ([...folder.docs.values()].some((d) => d.dirty) && !confirm('Some files have unsaved changes. Close the folder anyway?')) return;
+  folder = null; cur = null; $('files').hidden = true; $('save').textContent = 'Save .lua'; $('save').title = '';
+  $('code').value = localStorage.getItem('lab.script') || TEMPLATES['Widget: telemetry gauge']; hist.stack = [code()]; hist.idx = 0;
+  sel = null; refreshHl(); updUndo(); run(); showInspector();
+}
+async function saveDoc(d) {
+  if (!d) return;
+  syncCur();
+  try {
+    if (d.handle) { const w = await d.handle.createWritable(); await w.write(d.text); await w.close(); d.saved = d.text; markDirty(d); status(`saved ${d.rel}`, 'ok'); setTimeout(() => host && report(), 2500); }
+    else { download(d.rel.split('/').pop(), d.text); d.saved = d.text; markDirty(d); status('This browser cannot write into the folder, so a copy was downloaded. Use Chrome or Edge to save in place.', 'warn'); }
+  } catch (e) { status(`Could not save ${d.rel}: ${e.message}`, 'err'); }
+}
+$('saveall').onclick = async () => { for (const d of folder.docs.values()) if (d.dirty) await saveDoc(d); };
+$('closefolder').onclick = closeFolder;
+$('entry').onchange = () => { folder.entry = $('entry').value; if (cur !== folder.entry) openDoc(folder.entry); else run(); };
+$('wopts').onchange = () => run(); $('flight').onchange = () => run();
+$('openfolder').onclick = async () => {
+  try {
+    if (window.showDirectoryPicker) {
+      const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+      status(`reading ${dir.name} ...`, 'ok'); loadFolder(dir.name, await readDirectory(dir, decodePng));
+    } else $('dirpick').click(); // other browsers: read-only
+  } catch (e) { if (e.name !== 'AbortError') status('Could not open the folder: ' + e.message, 'err'); }
+};
+$('dirpick').onchange = async (e) => { const r = await readFileList([...e.target.files], decodePng); loadFolder(r.rootName, r.entries); e.target.value = ''; };
+// simulated flight (the same sliders as the Yaapu demo page)
+for (const [k, label, min, max, step] of FLIGHT_SLIDERS) {
+  $('fctl').insertAdjacentHTML('beforeend', `<label>${label}</label><input type="range" id="s_${k}" min="${min}" max="${max}" step="${step}" value="${pt.s[k]}"><span id="v_${k}">${pt.s[k]}</span>`);
+  $('s_' + k).oninput = (e) => { pt.set({ [k]: +e.target.value }); $('v_' + k).textContent = e.target.value; };
+}
+$('armb').onclick = () => { pt.set({ armed: !pt.s.armed }); $('armb').textContent = pt.s.armed ? 'Disarm' : 'Arm'; };
+const SAMPLE_MSGS = [['EKF3 IMU0 tilt alignment complete', 6], ['PreArm: Compass not calibrated', 4], ['Battery 1 is low 14.6V used 1850 mAh', 3], ['RTL: Reached home', 6], ['Mission: 3 WP', 6]];
+let msgI = 0;
+$('msgb').onclick = () => { if (!host) return; const [m, sev] = SAMPLE_MSGS[msgI++ % SAMPLE_MSGS.length]; host.sportQueue.push(...pt.messageFrames(m, sev)); };
+Object.assign(window.__lab, { openEntries: (name, entries) => loadFolder(name, entries), saveDoc, get folder() { return folder; } }); // for tests
 $('file').onchange = async (e) => { const f = e.target.files[0]; if (f) { setCode(await f.text()); sel = null; run(); } };
 
 // ---- radio keys ----

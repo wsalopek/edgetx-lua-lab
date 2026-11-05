@@ -20,6 +20,11 @@ export const DEFAULT_STATE = {
   lat: 47.6062, lon: -122.3321, rssi: 90,
 };
 
+// [state key, label, min, max, step] for the "simulated flight" sliders
+export const FLIGHT_SLIDERS = [['roll', 'Roll', -90, 90, 1], ['pitch', 'Pitch', -45, 45, 1], ['yaw', 'Heading', 0, 359, 1], ['hspeed', 'Speed m/s', 0, 40, 1],
+  ['vspeed', 'Climb m/s', -10, 10, 0.1], ['homeAlt', 'Alt (home) m', 0, 400, 1], ['homeDist', 'Home dist m', 0, 2000, 10], ['battV', 'Battery V', 12, 17, 0.1],
+  ['battA', 'Current A', 0, 60, 0.5], ['battMah', 'Used mAh', 0, 5000, 10], ['sats', 'Satellites', 0, 15, 1], ['rssi', 'RSSI', 0, 100, 1]];
+
 export class Passthrough {
   constructor(state = {}) { this.s = { ...DEFAULT_STATE, ...state }; }
   set(patch) { Object.assign(this.s, patch); }

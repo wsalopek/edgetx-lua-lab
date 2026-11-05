@@ -34,6 +34,7 @@ Rebuild it after changing the source with `node tools/build-single.mjs` (needs N
 node tools/serve.mjs 8130
 ```
 - `demo/editor.html` - write a widget / telemetry / plain script and see the simulated radio screen; radio keys + touchscreen input; **Design mode**: click/drag/resize things on the screen and the edits are written into your Lua code (or type code and watch the screen)
+- **Open folder...** (Chrome / Edge): pick a widget folder (e.g. `.../WIDGETS/yaapu`) or a whole SD-card folder. All its files appear in a file tree; edit any of them, Ctrl+S writes them back to disk, and the widget runs live next to the code (Yaapu gets simulated flight telemetry and its 4 pages). Other browsers can open a folder read-only and download copies.
 - EdgeTX 2.11+ **LVGL** scripts (`lvgl.build`, `lvgl.label`, buttons, sliders, toggles, boxes with flex layout, arcs...) run too, and the Design mode drags them by rewriting their table fields (`x = ..., y = ...`). Template: "LVGL tool script". Not drawn yet: image, qrcode, pickers, pages, dialogs.
 - The screen picker simulates the TX16S (480x272), TX15 (480x320), T15 Pro (800x480), NV14 (320x240) and portrait 320x480, each with the font set the real firmware builds in. The real Yaapu widget runs on all five (`node tools/run-yaapu.mjs`, env `SCREEN=800x480`). Black-and-white radios (128x64, 212x64) are not simulated yet: they use a different drawing API and 1-bit fonts.
 - `demo/yaapu.html` - the real Yaapu widget flying on simulated ArduPilot telemetry
