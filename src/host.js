@@ -231,10 +231,24 @@ export class LuaHost {
     def('drawHudRectangle', () => {
       lcd.hudRect(lauxlib.luaL_checknumber(L, 1), lauxlib.luaL_checknumber(L, 2), I(3), I(4), I(5), I(6), lcd.resolve(U(7, 0))); return 0;
     });
+    const col = (i) => lcd.resolve(U(i, 0));
+    def('drawCircle', () => { lcd.circle(I(1), I(2), I(3), col(4)); return 0; });
+    def('drawFilledCircle', () => { lcd.filledCircle(I(1), I(2), I(3), col(4)); return 0; });
+    def('drawTriangle', () => { lcd.triangle(I(1), I(2), I(3), I(4), I(5), I(6), col(7)); return 0; });
+    def('drawFilledTriangle', () => { lcd.filledTriangle(I(1), I(2), I(3), I(4), I(5), I(6), col(7)); return 0; });
+    def('drawArc', () => { lcd.annulusSector(I(1), I(2), I(3) - 1, I(3), I(4), I(5), col(6)); return 0; });
+    def('drawPie', () => { lcd.annulusSector(I(1), I(2), 0, I(3), I(4), I(5), col(6)); return 0; });
+    def('drawAnnulus', () => { lcd.annulusSector(I(1), I(2), I(3), I(4), I(5), I(6), col(7)); return 0; });
+    def('invertRect', () => { lcd.invertRect(I(1), I(2), I(3), I(4), col(5)); return 0; });
+    def('drawTextLines', () => {
+      const x = I(1), y = I(2), w = I(3), hh = I(4), txt = str(5), fl = U(6, 0);
+      const c = lcd.resolve(fl);
+      if (fl & FLAGS.INVERS) lcd.fillRect(x, y, w, hh, c);
+      const [mx, my] = lcd.textLines(x, y, w, hh, txt, fl, fl & FLAGS.INVERS ? lcd.resolve(U(7, colorToFlags(COLOR_INDEX.PRIMARY2))) : c);
+      lua.lua_pushinteger(L, mx); lua.lua_pushinteger(L, my); return 2;
+    });
     // not implemented yet: record the call so we know what scripts need
-    for (const n of ['invertRect', 'drawTextLines', 'drawChannel', 'drawSwitch', 'drawSource', 'drawBitmapPattern', 'drawBitmapPatternPie',
-      'drawCircle', 'drawFilledCircle', 'drawTriangle', 'drawFilledTriangle', 'drawArc', 'drawPie', 'drawAnnulus',
-      'exitFullScreen']) {
+    for (const n of ['drawChannel', 'drawSwitch', 'drawSource', 'drawBitmapPattern', 'drawBitmapPatternPie', 'exitFullScreen']) {
       this._def('lcd', n, () => { lcd.noteUnsupported('lcd.' + n); return 0; });
     }
   }

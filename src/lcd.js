@@ -154,6 +154,84 @@ export class Lcd {
     }
   }
 
+  // ---- shapes: ports of EdgeTX bitmapbuffer_draw_extra.cpp (LVGL anti-aliasing approximated by pixel coverage) ----
+  _ringCoverage(px, py, cx, cy, rOut, rIn) {
+    const d = Math.hypot(px - cx, py - cy);
+    const o = Math.min(1, Math.max(0, rOut + 1 - d)), i = rIn > 0 ? Math.min(1, Math.max(0, rIn + 1 - d)) : 0;
+    return o - i;
+  }
+  circle(x, y, r, c, thickness = 1) {
+    for (let py = y - r - 1; py <= y + r + 1; py++) for (let px = x - r - 1; px <= x + r + 1; px++) {
+      const a = this._ringCoverage(px, py, x, y, r, r - thickness); if (a > 0) this.blend(px, py, c, Math.round(a * 255));
+    }
+  }
+  filledCircle(x, y, r, c) {
+    for (let py = y - r - 1; py <= y + r + 1; py++) for (let px = x - r - 1; px <= x + r + 1; px++) {
+      const a = this._ringCoverage(px, py, x, y, r, 0); if (a > 0) this.blend(px, py, c, Math.round(a * 255));
+    }
+  }
+  // LVGL arc: angles in degrees measured clockwise from 12 o'clock (EdgeTX subtracts 90 for LVGL's 3 o'clock zero)
+  annulusSector(x, y, rIn, rOut, start, end, c) {
+    if (end === start) end += 1;
+    start = ((start % 360) + 360) % 360; end = ((end % 360) + 360) % 360;
+    const R = rOut;
+    for (let py = y - R - 1; py <= y + R + 1; py++) for (let px = x - R - 1; px <= x + R + 1; px++) {
+      let a = this._ringCoverage(px, py, x, y, rOut, rIn); if (a <= 0) continue;
+      let ang = (Math.atan2(px - x, -(py - y)) * 180) / Math.PI; if (ang < 0) ang += 360; // 0 = up, clockwise
+      const inside = start <= end ? ang >= start && ang <= end : ang >= start || ang <= end;
+      if (inside) this.blend(px, py, c, Math.round(a * 255));
+    }
+  }
+  triangle(x1, y1, x2, y2, x3, y3, c) { this.line(x1, y1, x2, y2, 0xff, c); this.line(x2, y2, x3, y3, 0xff, c); this.line(x3, y3, x1, y1, 0xff, c); }
+  filledTriangle(x0, y0, x1, y1, x2, y2, c, opacity = 0) { // exact port (integer math, C division truncates)
+    const T = Math.trunc, hl = (x, y, w) => { for (let i = 0; i < w; i++) opacity ? this.blend(x + i, y, c, (opacity & 15) * 17) : this.pixel(x + i, y, c); };
+    let a, b;
+    if (y0 > y1) { [y0, y1] = [y1, y0]; [x0, x1] = [x1, x0]; }
+    if (y1 > y2) { [y2, y1] = [y1, y2]; [x2, x1] = [x1, x2]; }
+    if (y0 > y1) { [y0, y1] = [y1, y0]; [x0, x1] = [x1, x0]; }
+    if (y0 === y2) { a = b = x0; if (x1 < a) a = x1; else if (x1 > b) b = x1; if (x2 < a) a = x2; else if (x2 > b) b = x2; hl(a, y0, b - a + 1); return; }
+    const dx01 = x1 - x0, dy01 = y1 - y0, dx02 = x2 - x0, dy02 = y2 - y0, dx12 = x2 - x1, dy12 = y2 - y1;
+    let sa = 0, sb = 0, y; const last = y1 === y2 ? y1 : y1 - 1;
+    for (y = y0; y <= last; y++) {
+      a = x0 + T(sa / dy01); b = x0 + T(sb / dy02); sa += dx01; sb += dx02;
+      if (a > b) [a, b] = [b, a]; hl(a, y, b - a + 1);
+    }
+    sa = dx12 * (y - y1); sb = dx02 * (y - y0);
+    for (; y <= y2; y++) {
+      a = x1 + T(sa / dy12); b = x0 + T(sb / dy02); sa += dx12; sb += dx02;
+      if (a > b) [a, b] = [b, a]; hl(a, y, b - a + 1);
+    }
+  }
+  // invertRect: pixel = bg + color - pixel per channel, bg = theme PRIMARY2 (port of BitmapBuffer::invertRect)
+  invertRect(x, y, w, h, c) {
+    const split = (p) => [p >> 11, (p >> 5) & 63, p & 31], bg = split(this.colorTable[COLOR_INDEX.PRIMARY2]), col = split(c);
+    const x0 = Math.max(0, x), y0 = Math.max(0, y), x1 = Math.min(this.w, x + w), y1 = Math.min(this.h, y + h);
+    for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) {
+      const o = yy * this.w + xx, p = split(this.fb[o]);
+      const cl = (v, m) => Math.max(0, Math.min(m, v));
+      this.fb[o] = (cl(bg[0] + col[0] - p[0], 31) << 11) | (cl(bg[1] + col[1] - p[1], 63) << 5) | cl(bg[2] + col[2] - p[2], 31);
+    }
+  }
+  // word-wrapping text (port of BitmapBuffer::drawTextLines); returns [maxX, maxY]
+  textLines(left, top, width, height, str, flags, c) {
+    const CORR = [-2, -2, -2, -2, -3, -5, -2, -2], line = this.fontHeight(flags) + CORR[(flags & 0x0f00) >> 8];
+    const space = this.textWidth(' ', flags); let x = left, y = top, mx = 0, my = 0, i = 0;
+    flags &= ~(FLAGS.VCENTER | FLAGS.CENTER | FLAGS.RIGHT);
+    const SEP = '-/:({[';
+    for (;;) {
+      let j = i;
+      while (j < str.length && str[j] !== ' ' && str[j] !== '\n') { if (SEP.includes(str[j])) { j++; break; } j++; }
+      const word = this.textWidth(str.slice(i, j), flags);
+      if (x + word > left + width && x > left) { x = left; y += line; my = y + line; } else mx = Math.max(mx, x + word);
+      if (y + line > top + height) return [mx, my];
+      this.drawTextRaw(x, y, str.slice(i, j), flags, c);
+      x += word;
+      if (j >= str.length) return [mx, my];
+      if (str[j] === '\n') { x = left; y += line; my = y + line; j++; } else if (str[j] === ' ') { x += space; j++; }
+      i = j;
+    }
+  }
+
   // ---- text ----
   drawText(x, y, text, flags = 0, invColorFlags) {
     text = String(text);
