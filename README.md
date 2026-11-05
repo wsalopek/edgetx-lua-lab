@@ -29,6 +29,6 @@ See `docs/NOTES.md` for research notes and `docs/MILESTONE1.md` for the current 
 ```
 node tools/serve.mjs 8130
 ```
-- `demo/editor.html` - write a widget / telemetry / plain script, see the simulated radio screen, errors point at the failing line
+- `demo/editor.html` - write a widget / telemetry / plain script and see the simulated radio screen; radio keys + touchscreen input; **Design mode**: click/drag/resize things on the screen and the edits are written into your Lua code (or type code and watch the screen)
 - `demo/yaapu.html` - the real Yaapu widget flying on simulated ArduPilot telemetry
 - `demo/lab.html` - the original minimal editor prototype

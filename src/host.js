@@ -1,5 +1,6 @@
 // Lua host: runs EdgeTX Lua scripts on Fengari (Lua 5.3) with a simulated radio API.
 // Works in the browser (global `fengari` from vendor/fengari/fengari-web.js) and in Node (tests).
+import { EVENTS } from './events.js';
 import { FLAGS, COLOR_INDEX, THEME_COLOR_COUNT, colorToFlags, rgb565, Bitmap } from './lcd.js';
 
 const norm = (p) => {
@@ -81,6 +82,7 @@ export class LuaHost {
     this.modelName = opts.modelName || 'Simulated';
     this.general = Object.assign({ imperial: 0, language: 'EN', voice: 'EN', battMin: 6.0, battMax: 8.4 }, opts.general || {});
     this.events = []; // audio/haptic calls
+    this.record = false; this.recordChunk = 'script'; this.items = [];
     this.unknownCalls = new Map(); // global API functions scripts called that we do not have
     const { lua, lauxlib, lualib } = this.f;
     this.L = lauxlib.luaL_newstate();
@@ -154,8 +156,9 @@ export class LuaHost {
     return { ok: true, kind: k.value };
   }
   // run a telemetry-script function: init() or run(event) / background()
-  callTelemetry(fn, ...args) {
-    return this.exec("if __widgetModule." + fn + " then local r = __widgetModule." + fn + "(" + args.map((a) => Number(a) | 0).join(',') + ") if r == 2 then __done = true end end", '=' + fn);
+  callTelemetry(fn, event = null, touch = null) {
+    const a = fn === 'run' ? (this._ev(event === null ? 0 : event) + ', ' + this._touch(touch)) : '';
+    return this.exec("if __widgetModule." + fn + " then local r = __widgetModule." + fn + "(" + a + ") if r == 2 then __done = true end end", '=' + fn);
   }
 
   // EdgeTX can show the same widget on several screens; each gets its own create() but they share script state.
@@ -168,9 +171,11 @@ export class LuaHost {
       ${opts}
       __instances[${JSON.stringify(id)}] = __widgetModule.create({ x = 0, y = 0, w = ${zone.w}, h = ${zone.h} }, o)`, '=create');
   }
-  callWidget(fn = 'refresh', id = 'default') {
-    return this.exec(`local w = __instances[${JSON.stringify(id)}]; if __widgetModule.${fn} then __widgetModule.${fn}(w) end`, '=' + fn);
+  callWidget(fn = 'refresh', id = 'default', event = null, touch = null) {
+    return this.exec("local w = __instances[" + JSON.stringify(id) + "]; if __widgetModule." + fn + " then __widgetModule." + fn + "(w, " + this._ev(event) + ", " + this._touch(touch) + ") end", '=' + fn);
   }
+  _ev(e) { return e == null ? 'nil' : String(e | 0); }
+  _touch(t) { return t ? '{' + Object.entries(t).map(([k, v]) => k + '=' + (typeof v === 'boolean' ? v : Number(v) | 0)).join(',') + '}' : 'nil'; }
 
   // evaluate a Lua expression and return its tostring()
   evalString(expr) {
@@ -191,6 +196,7 @@ export class LuaHost {
     }
     this._setGlobalInt('LCD_W', this.lcd.w); this._setGlobalInt('LCD_H', this.lcd.h);
     this._setGlobalInt('FULLSCALE', 1024);
+    for (const [k, v] of Object.entries(EVENTS)) this._setGlobalInt(k, v);
   }
 
   // ---- lcd.* ----
@@ -203,7 +209,9 @@ export class LuaHost {
     const O = (i, d) => (lua.lua_isnoneornil(L, i) ? d : Math.trunc(lauxlib.luaL_checknumber(L, i)));
     const U = (i, d) => O(i, d) >>> 0;
     const str = (i) => to_jsstring(lauxlib.luaL_checkstring(L, i));
-    const def = (n, fn) => this._def('lcd', n, fn);
+    const RECORD = new Set(['drawText', 'drawNumber', 'drawTimer', 'drawRectangle', 'drawFilledRectangle', 'drawGauge', 'drawTextLines', 'drawLine', 'drawCircle',
+      'drawFilledCircle', 'drawArc', 'drawPie', 'drawAnnulus', 'drawTriangle', 'drawFilledTriangle', 'drawBitmap']);
+    const def = (n, fn) => this._def('lcd', n, RECORD.has(n) ? () => { if (this.record) this._record(n); return fn(); } : fn);
     def('refresh', () => 0);
     def('resetBacklightTimeout', () => 0);
     def('clear', () => { lcd.clear(lcd.resolve(U(1, colorToFlags(COLOR_INDEX.SECONDARY3)))); return 0; });
@@ -271,6 +279,21 @@ export class LuaHost {
     for (const n of ['drawChannel', 'drawSwitch', 'drawSource', 'drawBitmapPattern', 'drawBitmapPatternPie', 'exitFullScreen']) {
       this._def('lcd', n, () => { lcd.noteUnsupported('lcd.' + n); return 0; });
     }
+  }
+
+  // Remember what a drawing call drew and where in the user's script it came from (for click-and-drag editing).
+  _record(name) {
+    const { lua, to_jsstring } = this.f; const L = this.L;
+    const ar = new lua.lua_Debug();
+    if (!lua.lua_getstack(L, 1, ar)) return;
+    lua.lua_getinfo(L, this.S('Sl'), ar);
+    if (to_jsstring(ar.short_src) !== this.recordChunk) return;
+    const n = lua.lua_gettop(L), a = [];
+    for (let i = 1; i <= n; i++) a.push(lua.lua_type(L, i) === lua.LUA_TNUMBER ? lua.lua_tonumber(L, i) : lua.lua_type(L, i) === lua.LUA_TSTRING ? to_jsstring(lua.lua_tostring(L, i)) : null);
+    let bbox;
+    if (name === 'drawBitmap') { const b = this._bitmapArg(1); const sc = (a[3] || 100) / 100; bbox = b ? [a[1], a[2], Math.round(b.w * sc), Math.round(b.h * sc)] : null; }
+    else bbox = this.lcd.bboxFor(name, a);
+    if (bbox) this.items.push({ fn: name, line: ar.currentline, args: a, bbox });
   }
 
   // ---- bitmaps ----

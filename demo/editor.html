@@ -6,18 +6,24 @@
  h1{font-size:17px;margin:0 0 8px} h1 small{color:#888;font-weight:normal}
  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
  button,select{background:#2c2c2c;color:#ddd;border:1px solid #555;border-radius:4px;padding:4px 10px;font:inherit;cursor:pointer}
- button:hover{background:#3a3a3a}
+ button:hover{background:#3a3a3a} button.on{background:#27518f;border-color:#5a8fd8}
  .main{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
  .ed{position:relative;display:flex;border:1px solid #444;background:#111;width:600px;height:520px}
  #gutter{width:44px;overflow:hidden;background:#181818;color:#666;text-align:right;font:13px/1.5 Consolas,monospace;padding:8px 6px 8px 0;box-sizing:border-box;user-select:none;white-space:pre}
- #gutter .bad{color:#fff;background:#a33}
+ #gutter .bad{color:#fff;background:#a33} #gutter .sel{color:#fff;background:#27518f}
  #code{flex:1;background:#111;color:#cfe;border:0;outline:0;resize:none;font:13px/1.5 Consolas,monospace;padding:8px;tab-size:2;white-space:pre;overflow:auto}
- canvas{image-rendering:pixelated;border:1px solid #555;width:720px;height:408px;display:block;background:#000}
+ .screen{position:relative;width:720px;height:408px}
+ .screen canvas{position:absolute;left:0;top:0;width:720px;height:408px;image-rendering:pixelated;border:1px solid #555;box-sizing:border-box}
+ #ov{background:transparent;outline:none}
  #status{font:12px Consolas,monospace;white-space:pre-wrap;min-height:34px;margin:6px 0;max-width:720px}
  .err{color:#f88}.ok{color:#8d8}.warn{color:#eb6}
- .side{width:720px}
+ .side{width:724px} .row{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;align-items:center}
+ .row span.lbl{color:#999;font-size:12px;min-width:62px}
  table{border-collapse:collapse;font-size:12px} td{padding:1px 6px 1px 0} input.t{width:90px;background:#222;color:#ddd;border:1px solid #444;padding:1px 4px}
- details{margin-top:8px;max-width:720px} summary{cursor:pointer;color:#9cf}
+ #insp{border:1px solid #3a3a3a;background:#202020;padding:6px 8px;margin-top:6px;font-size:12px;min-height:20px}
+ #insp input{width:150px;background:#111;color:#cfe;border:1px solid #444;padding:1px 4px;font:12px Consolas,monospace}
+ #insp td:first-child{color:#999}
+ details{margin-top:8px} summary{cursor:pointer;color:#9cf}
  #api{font:12px Consolas,monospace;columns:3;column-gap:16px;color:#aaa}
 </style></head><body>
 <h1>EdgeTX Lua Lab <small>&mdash; script editor (prototype) &middot; simulated colour radio, 480&times;272</small></h1>
@@ -31,7 +37,12 @@
 <div class="main">
  <div><div class="ed"><div id="gutter"></div><textarea id="code" spellcheck="false" wrap="off"></textarea></div>
   <div id="status"></div></div>
- <div class="side"><canvas id="lcd" width="480" height="272"></canvas>
+ <div class="side">
+  <div class="row"><span class="lbl">Mode</span><button id="m_run" class="on">Run: mouse = touchscreen</button><button id="m_des">Design: drag things on the screen</button></div>
+  <div class="screen"><canvas id="lcd" width="480" height="272"></canvas><canvas id="ov" width="720" height="408" tabindex="0"></canvas></div>
+  <div class="row"><span class="lbl">Radio keys</span><span id="keys"></span> <span id="evt" style="color:#888;font-size:12px"></span></div>
+  <div class="row" id="palrow"><span class="lbl">Add</span></div>
+  <div id="insp">Design mode: click something on the screen to select it. Drag to move, drag the corner square to resize, arrow keys nudge. Changes are written into your code.</div>
   <details open><summary>Simulated telemetry sensors</summary><table id="sens"></table><button id="addsens">+ sensor</button></details>
   <details><summary>What this simulator supports</summary><div id="api"></div></details>
  </div>
@@ -40,9 +51,12 @@
 <script type="module">
 import { Lcd, loadFonts } from '../src/lcd.js';
 import { LuaHost } from '../src/host.js';
+import { KEYS, EVENTS } from '../src/events.js';
+import { SPEC, ARG_NAMES, findCall, patchArgs, moveItem, resizeItem, deleteItem, addStatement } from '../src/designer.js';
 const $ = (id) => document.getElementById(id);
 const fonts = await loadFonts(async (n) => (await fetch(`../src/fonts/${n}.json`)).json());
-const lcd = new Lcd(480, 272, fonts), ctx = $('lcd').getContext('2d');
+const lcd = new Lcd(480, 272, fonts), ctx = $('lcd').getContext('2d'), ov = $('ov'), octx = ov.getContext('2d');
+const S = 1.5; // screen pixels per radio pixel on this page
 
 const TEMPLATES = {
  'Widget: telemetry gauge': `-- A widget: EdgeTX calls create() once and refresh() many times a second.
@@ -76,15 +90,22 @@ end
 return { name = "Gauge", options = options, create = create, update = update, refresh = refresh }
 `,
  'Telemetry script (color radios)': `-- A telemetry script: init() once, then run(event) every frame.
+local count = 0
+local last = "(press a key or tap the screen)"
+
 local function init()
 end
 
 local function run(event, touchState)
+  if event == EVT_VIRTUAL_ENTER then count = count + 1 end
+  if event == EVT_VIRTUAL_EXIT then count = 0 end
+  if event == EVT_TOUCH_TAP then last = "tap at " .. touchState.x .. "," .. touchState.y end
   lcd.clear(COLOR_THEME_SECONDARY3)
   lcd.drawText(4, 4, "Telemetry script", BOLD + COLOR_THEME_PRIMARY1)
   lcd.drawText(4, 34, "Batt: " .. string.format("%.1f V", getValue("tx-voltage")), COLOR_THEME_PRIMARY1)
-  lcd.drawText(4, 60, "Alt:  " .. string.format("%.0f m", getValue("Alt")), COLOR_THEME_PRIMARY1)
-  lcd.drawText(4, 86, "Time: " .. getTime(), COLOR_THEME_PRIMARY1)
+  lcd.drawText(4, 60, "ENTER pressed " .. count .. " times (EXIT resets)", COLOR_THEME_PRIMARY1)
+  lcd.drawText(4, 86, last, COLOR_THEME_PRIMARY1)
+  if touchState then lcd.drawFilledCircle(touchState.x, touchState.y, 12, RED) end
   return 0
 end
 
@@ -111,7 +132,7 @@ function drawSensors() {
     const tr = document.createElement('tr');
     tr.innerHTML = `<td>${k}</td><td><input type="range" min="${Math.min(0, v * 2)}" max="${Math.max(100, v * 2)}" step="0.1" value="${v}"></td><td><input class="t" value="${v}"></td>`;
     const [rng, txt] = tr.querySelectorAll('input');
-    const set = (x) => { sensors[k] = +x; rng.value = x; txt.value = x; localStorage.setItem('lab.sensors', JSON.stringify(sensors)); restartTelemetry(); };
+    const set = (x) => { sensors[k] = +x; rng.value = x; txt.value = x; localStorage.setItem('lab.sensors', JSON.stringify(sensors)); if (host) Object.assign(host.telemetry, sensors); };
     rng.oninput = () => set(rng.value); txt.onchange = () => set(txt.value);
     $('sens').appendChild(tr);
   }
@@ -119,46 +140,68 @@ function drawSensors() {
 $('addsens').onclick = () => { const n = prompt('Sensor name (as used in getValue):'); if (n) { sensors[n] = 0; drawSensors(); } };
 drawSensors();
 
-// ---- running ----
-let host = null, kind = '', timer = null, widgetOk = false;
+// ---- state ----
+let host = null, kind = '', timer = null, badLine = 0, design = false, items = [], sel = null, drag = null;
+const queue = []; // events waiting for the next frame (EdgeTX delivers one per refresh)
 const status = (msg, cls = 'ok') => { $('status').className = cls; $('status').textContent = msg; };
-const gutter = () => {
-  const n = $('code').value.split('\n').length;
-  $('gutter').innerHTML = Array.from({ length: n }, (_, i) => (i + 1 === badLine ? `<div class="bad">${i + 1}</div>` : `<div>${i + 1}</div>`)).join('');
+const lineOf = (err) => { const m = /script:(\d+):/.exec(err || ''); return m ? +m[1] : 0; };
+const code = () => $('code').value;
+const setCode = (s) => { $('code').value = s; };
+
+function gutter() {
+  const n = code().split('\n').length;
+  $('gutter').innerHTML = Array.from({ length: n }, (_, i) => `<div class="${i + 1 === badLine ? 'bad' : sel && i + 1 === sel.line ? 'sel' : ''}">${i + 1}</div>`).join('');
   $('gutter').scrollTop = $('code').scrollTop;
-};
-let badLine = 0;
-const lineOf = (err) => { const m = /(?:script):(\d+):/.exec(err || ''); return m ? +m[1] : 0; };
-const paint = () => ctx.putImageData(new ImageData(lcd.toRGBA(), 480, 272), 0, 0);
-function fail(r, where) {
-  clearInterval(timer); timer = null; badLine = lineOf(r.error); gutter();
-  status(`${where}: ${r.error}`, 'err');
 }
+const paint = () => { ctx.putImageData(new ImageData(lcd.toRGBA(), 480, 272), 0, 0); overlay(); };
+function fail(r, where) { clearInterval(timer); timer = null; badLine = lineOf(r.error); gutter(); status(`${where}: ${r.error}`, 'err'); }
 function report(extra = '') {
-  const unsup = [...lcd.unsupported.keys()];
-  const log = host.log.slice(-6).join('\n');
+  const unsup = [...lcd.unsupported.keys()], log = host.log.slice(-6).join('\n');
   status('running ' + kind + (extra ? ' - ' + extra : '') + (unsup.length ? '\nnot simulated yet (draws nothing): ' + unsup.join(', ') : '') + (log ? '\nprint(): ' + log : ''), unsup.length ? 'warn' : 'ok');
 }
-function restartTelemetry() { if (host) Object.assign(host.telemetry, sensors); }
+
+// ---- which call in the source made an on-screen item ----
+function siteOf(it) { // index of the lcd.<fn>( call on that line whose literal x,y match (default 0)
+  const [xi, yi] = (SPEC[it.fn] || { move: [[0, 1]] }).move[0];
+  for (let k = 0; k < 8; k++) {
+    const c = findCall(code(), it.line, it.fn, k); if (!c) break;
+    if (c.args[xi] && +c.args[xi].text === it.args[xi] && c.args[yi] && +c.args[yi].text === it.args[yi]) return k;
+  }
+  return 0;
+}
+const keyOf = (it) => it && { line: it.line, fn: it.fn, nth: siteOf(it) };
+const same = (a, b) => a && b && a.line === b.line && a.fn === b.fn && a.nth === b.nth;
+const selItem = () => sel && items.find((it) => same(keyOf(it), sel));
+
+// ---- running ----
+function frame() {
+  host.items = []; host.record = true; lcd.unsupported.clear?.call;
+  const ev = queue.shift();
+  const e = ev ? ev.event : null, t = ev ? ev.touch : null;
+  if (ev) $('evt').textContent = ev.name + (t ? ` (${t.x},${t.y})` : '');
+  const r = kind === 'widget' ? host.callWidget('refresh', 'w', e, t) : host.callTelemetry('run', e === null ? 0 : e, t);
+  if (!r.ok) { fail(r, (kind === 'widget' ? 'refresh()' : 'run()') + ' error'); return false; }
+  items = host.items; paint(); report(); return true;
+}
 function run() {
-  clearInterval(timer); badLine = 0; gutter(); localStorage.setItem('lab.script', $('code').value);
-  lcd.unsupported.clear(); lcd.clear(0);
+  clearInterval(timer); badLine = 0; localStorage.setItem('lab.script', code());
+  lcd.unsupported.clear(); lcd.clear(0); queue.length = 0;
   host = new LuaHost({ fengari: window.fengari, lcd, telemetry: { ...sensors }, modelName: 'Simulated' });
-  const m = host.loadModuleText($('code').value, '=script');
+  host.record = true; items = [];
+  const m = host.loadModuleText(code(), '=script');
   if (!m.ok) { paint(); return fail(m, 'error'); }
   kind = m.kind; $('kind').textContent = kind === 'plain' ? 'plain script' : kind + ' script';
+  gutter();
   if (kind === 'widget') {
-    const c = host.newInstance('w', { w: 480, h: 272 }, {});
-    if (!c.ok) return fail(c, 'create() error');
-    const tick = () => { const r = host.callWidget('refresh', 'w'); if (!r.ok) { fail(r, 'refresh() error'); return false; } paint(); report(); return true; };
-    if (tick()) timer = setInterval(tick, 100);
+    const c = host.newInstance('w', { w: 480, h: 272 }, {}); if (!c.ok) return fail(c, 'create() error');
+    if (frame()) timer = setInterval(frame, 50);
   } else if (kind === 'telemetry') {
     const i = host.callTelemetry('init'); if (!i.ok) return fail(i, 'init() error');
-    const tick = () => { const r = host.callTelemetry('run', 0); if (!r.ok) { fail(r, 'run() error'); return false; } paint(); report(); return true; };
-    if (tick()) timer = setInterval(tick, 100);
-  } else { paint(); report('ran once'); }
+    if (frame()) timer = setInterval(frame, 50);
+  } else { host.items = []; host.record = true; const r = host.exec(code(), '=script'); if (!r.ok) return fail(r, 'error'); items = host.items; paint(); report('ran once'); }
 }
 let deb = 0;
+const rerun = () => { clearTimeout(deb); run(); };
 $('code').addEventListener('input', () => { gutter(); if ($('auto').checked) { clearTimeout(deb); deb = setTimeout(run, 350); } });
 $('code').addEventListener('scroll', () => { $('gutter').scrollTop = $('code').scrollTop; });
 $('code').addEventListener('keydown', (e) => {
@@ -166,16 +209,133 @@ $('code').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); run(); }
 });
 $('run').onclick = run;
-$('load').onclick = () => { $('code').value = TEMPLATES[$('tpl').value]; run(); };
-$('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('code').value], { type: 'text/plain' })); a.download = 'script.lua'; a.click(); };
+$('load').onclick = () => { setCode(TEMPLATES[$('tpl').value]); sel = null; run(); };
+$('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([code()], { type: 'text/plain' })); a.download = 'script.lua'; a.click(); };
 $('open').onclick = () => $('file').click();
-$('file').onchange = async (e) => { const f = e.target.files[0]; if (f) { $('code').value = await f.text(); run(); } };
+$('file').onchange = async (e) => { const f = e.target.files[0]; if (f) { setCode(await f.text()); sel = null; run(); } };
+
+// ---- radio keys ----
+const send = (name, event, touch = null) => { queue.push({ name, event, touch }); if (queue.length > 8) queue.shift(); if (kind === 'plain') run(); };
+for (const [label, ev] of Object.entries(KEYS)) {
+  const b = document.createElement('button'); b.textContent = label; b.style.padding = '3px 7px';
+  let t0 = 0;
+  b.onpointerdown = () => { t0 = performance.now(); };
+  b.onpointerup = () => { const long = performance.now() - t0 > 600; send(label + (long ? ' (long)' : ''), long && label === 'ENTER' ? EVENTS.EVT_VIRTUAL_ENTER_LONG : long && label === 'MDL' ? EVENTS.EVT_VIRTUAL_MENU_LONG : ev); };
+  $('keys').appendChild(b);
+}
+document.addEventListener('keydown', (e) => {
+  if (/^(TEXTAREA|INPUT|SELECT)$/.test(document.activeElement.tagName)) return;
+  if (design && sel && e.key.startsWith('Arrow')) {
+    e.preventDefault(); const st = e.shiftKey ? 10 : 1;
+    const dx = { ArrowLeft: -st, ArrowRight: st }[e.key] || 0, dy = { ArrowUp: -st, ArrowDown: st }[e.key] || 0;
+    commit(moveItem(code(), sel.line, sel.fn, sel.nth, dx, dy)); return;
+  }
+  if (design && sel && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); doDelete(); return; }
+  const map = { Enter: ['ENTER', EVENTS.EVT_VIRTUAL_ENTER], Escape: ['EXIT', EVENTS.EVT_VIRTUAL_EXIT], Backspace: ['EXIT', EVENTS.EVT_VIRTUAL_EXIT], PageUp: ['PAGE<', EVENTS.EVT_VIRTUAL_PREV_PAGE],
+    PageDown: ['PAGE>', EVENTS.EVT_VIRTUAL_NEXT_PAGE], ArrowLeft: ['wheel <', EVENTS.EVT_VIRTUAL_PREV], ArrowRight: ['wheel >', EVENTS.EVT_VIRTUAL_NEXT], m: ['MDL', EVENTS.EVT_VIRTUAL_MENU] };
+  if (map[e.key]) { e.preventDefault(); send(...map[e.key]); }
+});
+
+// ---- mouse on the screen: touch (run mode) or design (drag/resize) ----
+const pos = (e) => { const r = ov.getBoundingClientRect(); return [Math.round(((e.clientX - r.left) / r.width) * 480), Math.round(((e.clientY - r.top) / r.height) * 272)]; };
+const hit = (x, y) => { for (let i = items.length - 1; i >= 0; i--) { const [bx, by, bw, bh] = items[i].bbox; if (x >= bx - 2 && x <= bx + bw + 2 && y >= by - 2 && y <= by + bh + 2) return items[i]; } return null; };
+const handleOf = (it) => { const [bx, by, bw, bh] = it.bbox; return [bx + bw, by + bh]; };
+const resizable = (it) => it && SPEC[it.fn] && (SPEC[it.fn].size || SPEC[it.fn].radius !== undefined);
+let touch = null; // run-mode touch gesture
+ov.addEventListener('pointerdown', (e) => {
+  ov.focus(); ov.setPointerCapture(e.pointerId); const [x, y] = pos(e);
+  if (design) {
+    const cur = selItem();
+    if (cur && resizable(cur)) { const [hx, hy] = handleOf(cur); if (Math.abs(x - hx) <= 5 && Math.abs(y - hy) <= 5) { drag = { mode: 'size', x0: x, y0: y, dx: 0, dy: 0, key: sel }; return; } }
+    const h = hit(x, y);
+    sel = h ? keyOf(h) : null; showInspector(); gutter(); overlay();
+    if (h && SPEC[h.fn]) drag = { mode: 'move', x0: x, y0: y, dx: 0, dy: 0, key: sel };
+  } else {
+    touch = { x0: x, y0: y, t0: performance.now(), slid: false, sx: 0, sy: 0 };
+    send('touch down', EVENTS.EVT_TOUCH_FIRST, { x, y, tapCount: touch.tapCount || 0 });
+  }
+});
+ov.addEventListener('pointermove', (e) => {
+  const [x, y] = pos(e);
+  if (design && drag) { drag.dx = x - drag.x0; drag.dy = y - drag.y0; overlay(); }
+  else if (!design && touch) {
+    if (Math.abs(x - touch.x0) > 4 || Math.abs(y - touch.y0) > 4) touch.slid = true;
+    if (touch.slid) {
+      const last = queue[queue.length - 1];
+      const slide = { x, y, startX: touch.x0, startY: touch.y0, slideX: x - touch.x0, slideY: y - touch.y0, tapCount: 0 };
+      if (last && last.event === EVENTS.EVT_TOUCH_SLIDE) last.touch = slide; else send('touch slide', EVENTS.EVT_TOUCH_SLIDE, slide);
+    }
+  }
+});
+ov.addEventListener('pointerup', (e) => {
+  const [x, y] = pos(e);
+  if (design && drag) {
+    const d = drag; drag = null;
+    if (d.dx || d.dy) commit(d.mode === 'move' ? moveItem(code(), d.key.line, d.key.fn, d.key.nth, d.dx, d.dy) : resizeItem(code(), d.key.line, d.key.fn, d.key.nth, d.dx, d.dy));
+    else overlay();
+  } else if (!design && touch) {
+    const tp = performance.now() - touch.t0 < 400 && !touch.slid;
+    touch.tapCount = tp ? ((performance.now() - (touch.lastTap || 0) < 400 ? (touch.n || 0) + 1 : 1)) : 0;
+    send('touch up', EVENTS.EVT_TOUCH_BREAK, { x, y, tapCount: touch.tapCount });
+    if (tp) send('tap', EVENTS.EVT_TOUCH_TAP, { x, y, tapCount: touch.tapCount });
+    touch = null;
+  }
+});
+
+// ---- applying visual edits to the source ----
+function commit(newSrc) {
+  if (newSrc === null || newSrc === undefined) { status('That value is computed in a way I cannot edit visually - change it in the code.', 'warn'); overlay(); return; }
+  setCode(newSrc); run(); showInspector();
+}
+function doDelete() {
+  const r = deleteItem(code(), sel.line, sel.fn, sel.nth);
+  if (r === null) { status('Cannot delete: that call shares its line with other code. Edit the code directly.', 'warn'); return; }
+  sel = null; setCode(r); run(); showInspector();
+}
+const PALETTE = {
+  Text: 'lcd.drawText(20, 20, "Text", MIDSIZE + WHITE)', Number: 'lcd.drawNumber(20, 20, getValue("RSSI"), DBLSIZE + WHITE)',
+  Rectangle: 'lcd.drawRectangle(20, 70, 120, 50, WHITE, 2)', 'Filled rect': 'lcd.drawFilledRectangle(160, 70, 120, 50, BLUE)',
+  Circle: 'lcd.drawCircle(80, 180, 30, GREEN)', 'Filled circle': 'lcd.drawFilledCircle(180, 180, 30, YELLOW)',
+  Line: 'lcd.drawLine(240, 150, 400, 220, SOLID, WHITE)', Gauge: 'lcd.drawGauge(300, 70, 160, 20, 60, 100, GREEN)', Triangle: 'lcd.drawFilledTriangle(320, 240, 360, 170, 400, 240, RED)',
+};
+for (const [label, stmt] of Object.entries(PALETTE)) {
+  const b = document.createElement('button'); b.textContent = '+ ' + label; b.style.padding = '3px 7px';
+  b.onclick = () => { const r = addStatement(code(), stmt); setCode(r.src); sel = { line: r.line, fn: /lcd\.(\w+)/.exec(stmt)[1], nth: 0 }; run(); setDesign(true); showInspector(); };
+  $('palrow').appendChild(b);
+}
+
+// ---- inspector ----
+function showInspector() {
+  const it = selItem();
+  if (!sel || !it) { $('insp').textContent = sel ? `Selected line ${sel.line} (not drawn this frame)` : 'Design mode: click something on the screen to select it. Drag to move, drag the corner square to resize, arrow keys nudge. Changes are written into your code.'; return; }
+  const call = findCall(code(), sel.line, sel.fn, sel.nth); if (!call) { $('insp').textContent = 'Cannot find the call in the code.'; return; }
+  const names = ARG_NAMES[sel.fn] || [];
+  $('insp').innerHTML = `<b>lcd.${sel.fn}</b> on line ${sel.line} <button id="i_del" style="padding:1px 8px">Delete</button> <button id="i_go" style="padding:1px 8px">Show in code</button><table>` +
+    call.args.map((a, i) => `<tr><td>${names[i] || 'arg ' + (i + 1)}</td><td><input data-i="${i}" value="${a.text.replace(/"/g, '&quot;')}"></td></tr>`).join('') + '</table>';
+  $('i_del').onclick = doDelete;
+  $('i_go').onclick = () => { const ta = $('code'); const ls = code().split('\n'); let off = 0; for (let i = 0; i < sel.line - 1; i++) off += ls[i].length + 1; ta.focus(); ta.setSelectionRange(off, off + ls[sel.line - 1].length); ta.scrollTop = (sel.line - 5) * 19.5; };
+  for (const inp of $('insp').querySelectorAll('input')) inp.onchange = () => {
+    const c = findCall(code(), sel.line, sel.fn, sel.nth); commit(patchArgs(code(), c, { [inp.dataset.i]: inp.value }));
+  };
+}
+
+// ---- selection overlay ----
+function overlay() {
+  octx.clearRect(0, 0, 720, 408);
+  if (!design) return;
+  const it = selItem(); if (!it) return;
+  let [x, y, w, h] = it.bbox;
+  if (drag) { if (drag.mode === 'move') { x += drag.dx; y += drag.dy; } else { w += drag.dx; h += drag.dy; } }
+  octx.lineWidth = 1.5; octx.strokeStyle = '#4fa3ff'; octx.setLineDash([5, 3]); octx.strokeRect(x * S - 1, y * S - 1, w * S + 2, h * S + 2); octx.setLineDash([]);
+  if (resizable(it)) { octx.fillStyle = '#4fa3ff'; octx.fillRect((x + w) * S - 3, (y + h) * S - 3, 8, 8); }
+}
+function setDesign(on) { design = on; $('m_des').classList.toggle('on', on); $('m_run').classList.toggle('on', !on); ov.style.cursor = on ? 'move' : 'pointer'; if (!on) { drag = null; } overlay(); showInspector(); }
+$('m_run').onclick = () => setDesign(false); $('m_des').onclick = () => setDesign(true);
 
 // what the simulator supports (from the host's own tables)
 {
   const h = new LuaHost({ fengari: window.fengari, lcd: new Lcd(480, 272, fonts) });
-  const names = [...h.apiNames].filter((n) => !n.startsWith('__') && !/^(lcd\.(drawChannel|drawSwitch|drawSource|drawBitmapPattern|drawBitmapPatternPie|exitFullScreen))$/.test(n)).sort();
-  $('api').textContent = names.join('\n');
+  $('api').textContent = [...h.apiNames].filter((n) => !n.startsWith('__') && !/^lcd\.(drawChannel|drawSwitch|drawSource|drawBitmapPattern|drawBitmapPatternPie|exitFullScreen)$/.test(n)).sort().join('\n');
 }
 run();
 </script></body></html>

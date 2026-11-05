@@ -232,6 +232,27 @@ export class Lcd {
     }
   }
 
+  // bounding box [x, y, w, h] of what a drawing call (name + numeric/string args) covers; null if not selectable
+  bboxFor(name, a) {
+    const n = (i) => (typeof a[i] === 'number' ? a[i] : 0), fl = (i) => (typeof a[i] === 'number' ? a[i] >>> 0 : 0);
+    const box = (xs, ys) => [Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs) + 1, Math.max(...ys) - Math.min(...ys) + 1];
+    switch (name) {
+      case 'drawText': case 'drawNumber': case 'drawTimer': {
+        const f = fl(3), t = name === 'drawText' ? String(a[2] ?? '') : name === 'drawNumber' ? this.numberString(n(2), f) : this.timerString(n(2), f);
+        const w = this.textWidth(t, f), h = this.fontHeight(f); let x = n(0), y = n(1);
+        if (f & FLAGS.RIGHT) x -= w; else if (f & FLAGS.CENTER) x -= w >> 1;
+        if (f & FLAGS.VCENTER) y -= h >> 1;
+        return [x, y, w, h];
+      }
+      case 'drawRectangle': case 'drawFilledRectangle': case 'drawGauge': case 'drawTextLines': return [n(0), n(1), n(2), n(3)];
+      case 'drawLine': return box([n(0), n(2)], [n(1), n(3)]);
+      case 'drawTriangle': case 'drawFilledTriangle': return box([n(0), n(2), n(4)], [n(1), n(3), n(5)]);
+      case 'drawCircle': case 'drawFilledCircle': case 'drawArc': case 'drawPie': return [n(0) - n(2), n(1) - n(2), 2 * n(2) + 1, 2 * n(2) + 1];
+      case 'drawAnnulus': return [n(0) - n(3), n(1) - n(3), 2 * n(3) + 1, 2 * n(3) + 1];
+    }
+    return null;
+  }
+
   // ---- text ----
   drawText(x, y, text, flags = 0, invColorFlags) {
     text = String(text);
