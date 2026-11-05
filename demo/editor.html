@@ -11,7 +11,16 @@
  .ed{position:relative;display:flex;border:1px solid #444;background:#111;width:600px;height:520px}
  #gutter{width:44px;overflow:hidden;background:#181818;color:#666;text-align:right;font:13px/1.5 Consolas,monospace;padding:8px 6px 8px 0;box-sizing:border-box;user-select:none;white-space:pre}
  #gutter .bad{color:#fff;background:#a33} #gutter .sel{color:#fff;background:#27518f}
- #code{flex:1;background:#111;color:#cfe;border:0;outline:0;resize:none;font:13px/1.5 Consolas,monospace;padding:8px;tab-size:2;white-space:pre;overflow:auto}
+ .codewrap{position:relative;flex:1;overflow:hidden}
+ #hl,#code{position:absolute;inset:0;margin:0;border:0;font:13px/1.5 Consolas,monospace;padding:8px;tab-size:2;white-space:pre;box-sizing:border-box;letter-spacing:0}
+ #hl{overflow:hidden;color:#d8e0e8;pointer-events:none}
+ #code{background:transparent;color:transparent;caret-color:#fff;outline:0;resize:none;overflow:auto}
+ #code::selection{background:#35517a;color:transparent}
+ #hl .kw{color:#f08d49} #hl .str{color:#9ccc65} #hl .num{color:#e6c07b} #hl .com{color:#7a8794;font-style:italic}
+ #hl .api{color:#61afef} #hl .const{color:#c792ea} #hl .lit{color:#e6c07b}
+ #ac{position:absolute;z-index:5;background:#262a30;border:1px solid #556;border-radius:4px;font:12px Consolas,monospace;max-height:210px;overflow:auto;display:none;min-width:260px;box-shadow:0 4px 14px #000a}
+ #ac div{padding:2px 8px;white-space:pre;cursor:pointer} #ac div.sel{background:#27518f} #ac small{color:#8b96a3;margin-left:10px}
+ #phelp{font:12px Consolas,monospace;min-height:34px;margin-top:6px;max-width:600px;color:#aab} #phelp b{color:#7fd1ff} #phelp i{color:#8b96a3;font-style:normal;display:block}
  .screen{position:relative;width:720px;height:408px}
  .screen canvas{position:absolute;left:0;top:0;width:720px;height:408px;image-rendering:pixelated;border:1px solid #555;box-sizing:border-box}
  #ov{background:transparent;outline:none}
@@ -30,13 +39,14 @@
 <div class="bar">
  <select id="tpl"></select> <button id="load">Load template</button>
  <button id="open">Open .lua&hellip;</button> <button id="save">Save .lua</button>
+ <button id="undo" title="Ctrl+Z">&#8630; Undo</button><button id="redo" title="Ctrl+Y / Ctrl+Shift+Z">Redo &#8631;</button>
  <label><input type="checkbox" id="auto" checked> run as I type</label> <button id="run">Run (Ctrl+Enter)</button>
  <span id="kind" style="color:#9cf"></span>
  <input type="file" id="file" accept=".lua,text/plain" hidden>
 </div>
 <div class="main">
- <div><div class="ed"><div id="gutter"></div><textarea id="code" spellcheck="false" wrap="off"></textarea></div>
-  <div id="status"></div></div>
+ <div><div class="ed"><div id="gutter"></div><div class="codewrap"><pre id="hl"></pre><textarea id="code" spellcheck="false" wrap="off"></textarea><div id="ac"></div></div></div>
+  <div id="phelp"></div><div id="status"></div></div>
  <div class="side">
   <div class="row"><span class="lbl">Mode</span><button id="m_run" class="on">Run: mouse = touchscreen</button><button id="m_des">Design: drag things on the screen</button></div>
   <div class="screen"><canvas id="lcd" width="480" height="272"></canvas><canvas id="ov" width="720" height="408" tabindex="0"></canvas></div>
@@ -57,6 +67,17 @@ const $ = (id) => document.getElementById(id);
 const fonts = await loadFonts(async (n) => (await fetch(`../src/fonts/${n}.json`)).json());
 const lcd = new Lcd(480, 272, fonts), ctx = $('lcd').getContext('2d'), ov = $('ov'), octx = ov.getContext('2d');
 const S = 1.5; // screen pixels per radio pixel on this page
+import { highlight } from '../src/lua-syntax.js';
+// API knowledge for colouring and autocomplete: help text from EdgeTX's own source + what this simulator really implements
+const DOCS = await (await fetch('../src/api-docs.json')).json();
+const docBy = new Map(DOCS.map((d) => [d.name, d]));
+const GN = new LuaHost({ fengari: window.fengari, lcd: new Lcd(480, 272, fonts) }).globalNames();
+const IMPL = new Set(GN.funcs), KNOWN = new Set([...GN.funcs, ...DOCS.map((d) => d.name)]), CONSTS = new Set(GN.consts);
+const KW = 'and break do else elseif end for function if in local nil not or repeat return then true until while false'.split(' ');
+const NAMES = [
+  ...[...KNOWN].map((n) => ({ name: n, kind: 'fn', sig: docBy.get(n)?.sig ?? '', impl: IMPL.has(n) })),
+  ...[...CONSTS].map((n) => ({ name: n, kind: 'const', sig: '', impl: true })), ...KW.map((n) => ({ name: n, kind: 'kw', sig: '', impl: true })),
+].sort((a, b) => a.name.localeCompare(b.name));
 
 const TEMPLATES = {
  'Widget: telemetry gauge': `-- A widget: EdgeTX calls create() once and refresh() many times a second.
@@ -142,11 +163,31 @@ drawSensors();
 
 // ---- state ----
 let host = null, kind = '', timer = null, badLine = 0, design = false, items = [], sel = null, drag = null;
+window.__lab = { get items() { return items; }, get sel() { return sel; }, get host() { return host; } }; // for tests
 const queue = []; // events waiting for the next frame (EdgeTX delivers one per refresh)
 const status = (msg, cls = 'ok') => { $('status').className = cls; $('status').textContent = msg; };
 const lineOf = (err) => { const m = /script:(\d+):/.exec(err || ''); return m ? +m[1] : 0; };
 const code = () => $('code').value;
-const setCode = (s) => { $('code').value = s; };
+const refreshHl = () => { $('hl').innerHTML = highlight(code(), KNOWN, CONSTS) + '\n'; $('hl').scrollTop = $('code').scrollTop; $('hl').scrollLeft = $('code').scrollLeft; };
+// ---- undo / redo: every edit (typing is grouped, each drag / palette / inspector change is its own step) ----
+const hist = { stack: [], idx: -1 };
+const updUndo = () => { $('undo').disabled = hist.idx <= 0 && code() === hist.stack[hist.idx]; $('redo').disabled = hist.idx >= hist.stack.length - 1; };
+function record() {
+  const s = code(); if (hist.stack[hist.idx] === s) { updUndo(); return; }
+  hist.stack.length = hist.idx + 1; hist.stack.push(s); if (hist.stack.length > 300) hist.stack.shift(); hist.idx = hist.stack.length - 1; updUndo();
+}
+let recT = 0;
+const recordSoon = () => { clearTimeout(recT); recT = setTimeout(record, 600); };
+const setCode = (s) => { clearTimeout(recT); record(); $('code').value = s; refreshHl(); record(); };
+function goHist(d) {
+  clearTimeout(recT); record(); const i = hist.idx + d; if (i < 0 || i >= hist.stack.length) return;
+  hist.idx = i; $('code').value = hist.stack[i]; sel = null; refreshHl(); updUndo(); run(); showInspector();
+}
+$('undo').onclick = () => goHist(-1); $('redo').onclick = () => goHist(1);
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return; const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); goHist(-1); } else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); goHist(1); }
+}, true);
 
 function gutter() {
   const n = code().split('\n').length;
@@ -202,10 +243,72 @@ function run() {
 }
 let deb = 0;
 const rerun = () => { clearTimeout(deb); run(); };
-$('code').addEventListener('input', () => { gutter(); if ($('auto').checked) { clearTimeout(deb); deb = setTimeout(run, 350); } });
-$('code').addEventListener('scroll', () => { $('gutter').scrollTop = $('code').scrollTop; });
+function onEdit() { refreshHl(); gutter(); recordSoon(); updUndo(); if ($('auto').checked) { clearTimeout(deb); deb = setTimeout(run, 350); } }
+$('code').addEventListener('input', () => { onEdit(); showAc(); paramHelp(); });
+$('code').addEventListener('scroll', () => { $('gutter').scrollTop = $('hl').scrollTop = $('code').scrollTop; $('hl').scrollLeft = $('code').scrollLeft; hideAc(); });
+$('code').addEventListener('click', () => { hideAc(); paramHelp(); });
+$('code').addEventListener('keyup', (e) => { if (!/^(Arrow(Up|Down)|Enter|Tab|Escape)$/.test(e.key) || !ac.open) paramHelp(); });
+$('code').addEventListener('blur', () => setTimeout(hideAc, 150));
+
+// ---- autocomplete ----
+const ac = { open: false, items: [], idx: 0, word: '' };
+const CH = (() => { const s = document.createElement('span'); s.style.cssText = 'position:absolute;visibility:hidden;font:13px/1.5 Consolas,monospace;white-space:pre'; s.textContent = 'M'.repeat(40); document.body.appendChild(s); const w = s.getBoundingClientRect().width / 40; s.remove(); return w; })();
+function caretXY() {
+  const ta = $('code'), rows = ta.value.slice(0, ta.selectionStart).split('\n'), last = rows[rows.length - 1]; let col = 0;
+  for (const ch of last) col = ch === '\t' ? col + 2 - (col % 2) : col + 1;
+  return [8 + col * CH - ta.scrollLeft, 8 + rows.length * 19.5 - ta.scrollTop];
+}
+function hideAc() { ac.open = false; $('ac').style.display = 'none'; }
+function showAc() {
+  const ta = $('code'); if (ta.selectionStart !== ta.selectionEnd) return hideAc();
+  const before = ta.value.slice(0, ta.selectionStart), lineBefore = before.slice(before.lastIndexOf('\n') + 1);
+  const m = /([A-Za-z_][\w.]*)$/.exec(lineBefore);
+  if (!m || /--/.test(lineBefore) || (lineBefore.split('"').length - 1) % 2 || (lineBefore.split("'").length - 1) % 2) return hideAc();
+  const w = m[1]; if (w.length < 2 && !w.endsWith('.')) return hideAc();
+  let list = NAMES.filter((n) => n.name.startsWith(w) && n.name !== w);
+  if (!list.length) list = NAMES.filter((n) => n.name.toLowerCase().startsWith(w.toLowerCase()) && n.name !== w);
+  list.sort((a, b) => (b.impl - a.impl) || a.name.localeCompare(b.name));
+  if (!list.length) return hideAc();
+  ac.items = list.slice(0, 12); ac.idx = 0; ac.word = w; ac.open = true; drawAc();
+}
+function drawAc() {
+  const box = $('ac'); box.style.display = 'block';
+  box.innerHTML = ac.items.map((n, i) => `<div data-i="${i}" class="${i === ac.idx ? 'sel' : ''}">${n.name}<small>${n.kind === 'fn' ? '(' + n.sig + ')' + (n.impl ? '' : '  not simulated') : n.kind}</small></div>`).join('');
+  const [x, y] = caretXY(), wrap = box.parentElement.getBoundingClientRect();
+  box.style.left = Math.max(0, Math.min(x, wrap.width - 280)) + 'px'; box.style.top = Math.min(y, wrap.height - 150) + 'px';
+  box.querySelectorAll('div').forEach((d) => { d.onmousedown = (e) => { e.preventDefault(); ac.idx = +d.dataset.i; acceptAc(); }; });
+  const s = box.querySelector('.sel'); if (s) s.scrollIntoView({ block: 'nearest' });
+}
+function acceptAc() {
+  const n = ac.items[ac.idx]; if (!n) return hideAc();
+  const ta = $('code'), end = ta.selectionStart, start = end - ac.word.length, ins = n.name + (n.kind === 'fn' ? '(' : '');
+  ta.value = ta.value.slice(0, start) + ins + ta.value.slice(end); ta.selectionStart = ta.selectionEnd = start + ins.length;
+  hideAc(); onEdit(); paramHelp();
+}
+// signature help: which function call is the caret inside, and which argument
+function splitSig(sig) { return sig.replace(/[\[\]]/g, '').split(',').map((s) => s.trim()).filter(Boolean); }
+function paramHelp() {
+  const ta = $('code'), before = ta.value.slice(Math.max(0, ta.selectionStart - 800), ta.selectionStart); let depth = 0, commas = 0, name = null;
+  for (let i = before.length - 1; i >= 0; i--) {
+    const c = before[i];
+    if (c === ')' || c === ']' || c === '}') depth++;
+    else if (c === '(' || c === '[' || c === '{') { if (depth > 0) depth--; else if (c === '(') { const m = /([A-Za-z_][\w.]*)\s*$/.exec(before.slice(0, i)); name = m && m[1]; break; } else commas = 0; }
+    else if (c === ',' && depth === 0) commas++;
+  }
+  const d = name && docBy.get(name), box = $('phelp');
+  if (!d) { box.innerHTML = ''; return; }
+  const toks = splitSig(d.sig), cur = Math.min(commas, Math.max(0, toks.length - 1));
+  const pdoc = d.params.find((p) => p.split(/\s/)[0].split(',').includes(toks[cur] || '')) || '';
+  box.innerHTML = `<b>${name}</b>(${toks.map((t, i) => (i === cur ? `<b style="text-decoration:underline">${t}</b>` : t)).join(', ')})` + (IMPL.has(name) ? '' : ' <span style="color:#eb6">not simulated yet</span>') + `<i>${(pdoc ? pdoc + ' - ' : '') + d.doc}</i>`;
+}
 $('code').addEventListener('keydown', (e) => {
-  if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; t.value = t.value.slice(0, s) + '  ' + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = s + 2; t.dispatchEvent(new Event('input')); }
+  if (ac.open) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); ac.idx = (ac.idx + 1) % ac.items.length; drawAc(); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); ac.idx = (ac.idx + ac.items.length - 1) % ac.items.length; drawAc(); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { if (!e.ctrlKey) { e.preventDefault(); acceptAc(); return; } }
+    if (e.key === 'Escape') { e.preventDefault(); hideAc(); return; }
+  }
+  if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; t.value = t.value.slice(0, s) + '  ' + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = s + 2; onEdit(); }
   if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); run(); }
 });
 $('run').onclick = run;
@@ -337,5 +440,6 @@ $('m_run').onclick = () => setDesign(false); $('m_des').onclick = () => setDesig
   const h = new LuaHost({ fengari: window.fengari, lcd: new Lcd(480, 272, fonts) });
   $('api').textContent = [...h.apiNames].filter((n) => !n.startsWith('__') && !/^lcd\.(drawChannel|drawSwitch|drawSource|drawBitmapPattern|drawBitmapPatternPie|exitFullScreen)$/.test(n)).sort().join('\n');
 }
+refreshHl(); record();
 run();
 </script></body></html>

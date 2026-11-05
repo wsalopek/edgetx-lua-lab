@@ -120,6 +120,27 @@ export class LuaHost {
     }
   }
 
+  // names of everything scripts can use: { consts: [...numbers], funcs: ['getValue', 'lcd.drawText', ...] }
+  globalNames() {
+    const { lua, to_jsstring } = this.f; const L = this.L; const consts = [], funcs = [];
+    const walk = (prefix, depth) => {
+      lua.lua_pushnil(L);
+      while (lua.lua_next(L, -2) !== 0) {
+        if (lua.lua_type(L, -2) === lua.LUA_TSTRING) {
+          const k = to_jsstring(lua.lua_tostring(L, -2)), t = lua.lua_type(L, -1), full = prefix + k;
+          if (!k.startsWith('__')) {
+            if (t === lua.LUA_TNUMBER) consts.push(full);
+            else if (t === lua.LUA_TFUNCTION) funcs.push(full);
+            else if (t === lua.LUA_TTABLE && depth === 0 && /^[A-Za-z][A-Za-z0-9_]*$/.test(k) && k !== 'package' && k !== '_G') { lua.lua_pushvalue(L, -1); walk(full + '.', 1); lua.lua_pop(L, 1); }
+          }
+        }
+        lua.lua_pop(L, 1);
+      }
+    };
+    lua.lua_pushglobaltable(L); lua.lua_pushvalue(L, -1); walk('', 0); lua.lua_pop(L, 2);
+    return { consts, funcs };
+  }
+
   // ---- running code ----
   exec(code, chunkName = '=chunk') {
     const { lua, lauxlib, to_jsstring } = this.f; const L = this.L;
