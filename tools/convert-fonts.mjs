@@ -8,8 +8,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const srcDir = path.join(here, '..', 'vendor', 'edgetx-fonts');
-const outDir = path.join(here, '..', 'src', 'fonts');
+// usage: node tools/convert-fonts.mjs [std|sml|lrg]   (std = 480x272/480x320/320x480, sml = 320x240, lrg = 800x480; EdgeTX picks the set per screen)
+const set = process.argv[2] || 'std';
+const srcDir = path.join(here, '..', 'vendor', set === 'std' ? 'edgetx-fonts' : 'edgetx-fonts-' + set);
+const outDir = path.join(here, '..', 'src', 'fonts', set === 'std' ? '' : set);
 fs.mkdirSync(outDir, { recursive: true });
 
 const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');

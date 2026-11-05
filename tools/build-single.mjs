@@ -21,7 +21,10 @@ try {
 
 // 2. data that the page normally fetches
 const fonts = {};
-for (const f of fs.readdirSync(path.join(root, 'src', 'fonts'))) if (f.endsWith('.json')) fonts[f.replace(/\.json$/, '')] = JSON.parse(fs.readFileSync(path.join(root, 'src', 'fonts', f), 'utf8'));
+for (const set of ['std', 'sml', 'lrg']) {
+  const dir = path.join(root, 'src', 'fonts', set === 'std' ? '' : set); fonts[set] = {};
+  for (const f of fs.readdirSync(dir)) if (f.endsWith('.json')) fonts[set][f.replace(/.json$/, '')] = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+}
 const docs = JSON.parse(fs.readFileSync(path.join(root, 'src', 'api-docs.json'), 'utf8'));
 const fengari = fs.readFileSync(path.join(root, 'vendor', 'fengari', 'fengari-web.js'), 'utf8');
 const safe = (s) => s.replace(/<\/script/gi, '<\\/script'); // never let embedded text end the script early

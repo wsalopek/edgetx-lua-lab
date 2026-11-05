@@ -29,6 +29,14 @@ string.format = function(f, ...) -- EdgeTX tolerates floats for %d (truncates)
   return _fmt(f, table.unpack(a, 1, a.n))
 end
 collectgarbage = function(opt) if opt == "count" then return 1024.0 end return 0 end -- fengari has no lua_gc
+-- lcd.drawChannel: shows a telemetry value. Approximation: whole numbers as integers, others with one decimal (the radio uses each sensor's own unit and precision).
+function lcd.drawChannel(x, y, source, flags)
+  local v = getValue(source)
+  if type(v) ~= "number" then return end
+  local s = (v == math.floor(v)) and string.format("%d", v) or string.format("%.1f", v)
+  lcd.drawText(x, y, s, flags or 0)
+end
+function lcd.exitFullScreen() end -- the simulator has no separate full-screen widget view
 io = {}
 local files = {}
 function io.open(path, mode)
@@ -337,7 +345,7 @@ export class LuaHost {
       lua.lua_pushinteger(L, mx); lua.lua_pushinteger(L, my); return 2;
     });
     // not implemented yet: record the call so we know what scripts need
-    for (const n of ['drawChannel', 'drawSwitch', 'drawSource', 'drawBitmapPattern', 'drawBitmapPatternPie', 'exitFullScreen']) {
+    for (const n of ['drawSwitch', 'drawSource', 'drawBitmapPattern', 'drawBitmapPatternPie']) { // need model switch/source names and bitmap masks: not modelled yet
       this._def('lcd', n, () => { lcd.noteUnsupported('lcd.' + n); return 0; });
     }
   }

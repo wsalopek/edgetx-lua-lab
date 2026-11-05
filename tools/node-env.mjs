@@ -18,7 +18,7 @@ export function loadFengari() {
   try { return createRequire(import.meta.url)(path.join(root, 'vendor', 'fengari', 'fengari-web.js')); } finally { console.log = log; console.warn = warn; }
 }
 
-export const loadFontsNode = () => loadFonts(async (n) => JSON.parse(fs.readFileSync(path.join(root, 'src', 'fonts', `${n}.json`), 'utf8')));
+export const loadFontsNode = (set = 'std') => loadFonts(async (n) => JSON.parse(fs.readFileSync(path.join(root, 'src', 'fonts', set === 'std' ? '' : set, `${n}.json`), 'utf8')));
 
 // ---- tiny PNG writer (RGBA) ----
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });

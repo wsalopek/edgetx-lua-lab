@@ -1,21 +1,23 @@
 // Runs the real Yaapu widget headless with simulated flight telemetry and saves what it draws.
-// Usage: node tools/run-yaapu.mjs [sdDir] [out.png]      (env PAGE=1..6 picks the Yaapu screen)
+// Usage: node tools/run-yaapu.mjs [sdDir] [out.png]      env: PAGE=1..6 picks the Yaapu screen, SCREEN=480x272|480x320|800x480|320x240|320x480
 import path from 'node:path';
 import { Lcd } from '../src/lcd.js';
 import { LuaHost } from '../src/host.js';
 import { Passthrough, feed } from '../src/passthrough.js';
+import { SCREENS } from '../src/screens.js';
 import { loadFengari, loadFontsNode, writePng, loadSdTree, root } from './node-env.mjs';
 
-const sd = process.argv[2] || 'C:/Users/Bill/dev/FrskyTelemetryScript-custom/OTX_ETX/c480x272/SD';
+const scr = SCREENS[process.env.SCREEN || '480x272'];
+const sd = process.argv[2] || 'C:/Users/Bill/dev/FrskyTelemetryScript-custom/OTX_ETX/' + scr.yaapu + '/SD';
 const out = process.argv[3] || path.join(root, 'test', 'yaapu-flying.png');
 const { files, bitmaps } = loadSdTree(path.join(sd, 'WIDGETS', 'yaapu'), '/WIDGETS/yaapu/');
-const lcd = new Lcd(480, 272, await loadFontsNode());
+const lcd = new Lcd(scr.w, scr.h, await loadFontsNode(scr.fonts));
 let t = 1000;
 const host = new LuaHost({ fengari: loadFengari(), lcd, files, bitmaps, now: () => t, modelName: 'Endurance', onLog: (l) => console.log('lua>', l) });
 const pt = new Passthrough({ roll: 18, pitch: 6, yaw: 135, vspeed: 1.2, hspeed: 11 });
 const page = Number(process.env.PAGE || 1);
-let r = host.loadWidget('/WIDGETS/yaapu/main.lua', { w: 480, h: 272 }, { 'Screen Type': 1 });
-for (let p = 2; p <= 4 && r.ok; p++) r = host.newInstance('p' + p, { w: 480, h: 272 }, { 'Screen Type': p });
+let r = host.loadWidget('/WIDGETS/yaapu/main.lua', { w: scr.w, h: scr.h }, { 'Screen Type': 1 });
+for (let p = 2; p <= 4 && r.ok; p++) r = host.newInstance('p' + p, { w: scr.w, h: scr.h }, { 'Screen Type': p });
 const vis = page === 1 ? 'default' : 'p' + page;
 console.log('create:', r.ok ? 'ok' : r.error);
 const msgs = [['Yaapu Telemetry Widget', 7], ['EKF3 IMU0 is using GPS', 6], ['PreArm: Compass not calibrated', 4], ['Flight plan received', 6]];

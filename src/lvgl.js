@@ -14,9 +14,18 @@ local FIRST_CONTROL = TYPE_NO["button"]
 local CONTROLS = { button = 1, momentarybutton = 1, toggle = 1, textedit = 1, numberedit = 1, choice = 1, slider = 1, verticalslider = 1,
   page = 1, font = 1, align = 1, color = 1, timer = 1, switch = 1, source = 1, file = 1, setting = 1 }
 lvgl.FLOW_ROW = 0; lvgl.FLOW_COLUMN = 1
-lvgl.PAD_ZERO = 0; lvgl.PAD_TINY = 2; lvgl.PAD_SMALL = 4; lvgl.PAD_MEDIUM = 6; lvgl.PAD_LARGE = 8; lvgl.PAD_OUTLINE = 2; lvgl.PAD_BORDER = 2
+-- EdgeTX scales its layout constants on 320-wide and 800-wide landscape screens (etx_lv_theme.h LAYOUT_SCALE)
+local function LS(x)
+  if LCD_W > LCD_H then
+    if LCD_W == 320 then return (x * 8 + 5) // 10 end
+    if LCD_W == 800 then return (x * 11 + 4) // 8 end
+  end
+  return x
+end
+lvgl.LCD_SCALE = (LCD_W > LCD_H and LCD_W == 320) and 0.8 or ((LCD_W > LCD_H and LCD_W == 800) and 1.375 or 1.0)
+lvgl.PAD_ZERO = 0; lvgl.PAD_TINY = LS(2); lvgl.PAD_SMALL = LS(4); lvgl.PAD_MEDIUM = LS(6); lvgl.PAD_LARGE = LS(8); lvgl.PAD_OUTLINE = LS(2); lvgl.PAD_BORDER = 2
 lvgl.SCROLL_OFF = 0; lvgl.SCROLL_HOR = 3; lvgl.SCROLL_VER = 12; lvgl.SCROLL_ALL = 15
-lvgl.UI_ELEMENT_HEIGHT = 32; lvgl.PAGE_BODY_HEIGHT = LCD_H - 45
+lvgl.UI_ELEMENT_HEIGHT = LS(32); lvgl.PAGE_BODY_HEIGHT = LCD_H - LS(45)
 lvgl.PERCENT_SIZE = 0
 for n, v in pairs({ SRC_ALL = -1, SRC_INPUT = 1, SRC_LUA = 2, SRC_STICK = 4, SRC_POT = 8, SRC_OTHER = 16, SRC_HELI = 32, SRC_TRIM = 64, SRC_SWITCH = 128,
   SRC_LOGICAL_SWITCH = 256, SRC_TRAINER = 512, SRC_CHANNEL = 1024, SRC_GVAR = 2048, SRC_TELEM = 4096, SRC_CLEAR = 8192, SRC_INVERT = 16384,
@@ -135,7 +144,7 @@ function lvgl.__count() local n = 0; local function walk(o) for _, c in ipairs(o
 -- ---------- sizes ----------
 local function fontOf(o) return tonumber(val(o, "font", 0)) or 0 end
 local function textSize(txt, font) local w, h = lcd.sizeText(txt, font); return w, h end
-local BTN_H = 32
+local BTN_H = lvgl.UI_ELEMENT_HEIGHT
 -- natural size of an object that did not get explicit w / h
 local function naturalSize(o)
   local t = o.t

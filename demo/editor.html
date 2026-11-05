@@ -35,9 +35,10 @@
  details{margin-top:8px} summary{cursor:pointer;color:#9cf}
  #api{font:12px Consolas,monospace;columns:3;column-gap:16px;color:#aaa}
 </style></head><body>
-<h1>EdgeTX Lua Lab <small>&mdash; script editor (prototype) &middot; simulated colour radio, 480&times;272</small></h1>
+<h1>EdgeTX Lua Lab <small>&mdash; script editor (prototype) &middot; simulated colour radio</small></h1>
 <div class="bar">
  <select id="tpl"></select> <button id="load">Load template</button>
+ <select id="scr" title="Which radio screen to simulate (fonts and sizes follow the real firmware)"></select>
  <button id="open">Open .lua&hellip;</button> <button id="save">Save .lua</button>
  <button id="undo" title="Ctrl+Z">&#8630; Undo</button><button id="redo" title="Ctrl+Y / Ctrl+Shift+Z">Redo &#8631;</button>
  <label><input type="checkbox" id="auto" checked> run as I type</label> <button id="run">Run (Ctrl+Enter)</button>
@@ -64,11 +65,25 @@
 import { Lcd, loadFonts } from '../src/lcd.js';
 import { LuaHost } from '../src/host.js';
 import { KEYS, EVENTS } from '../src/events.js';
+import { SCREENS, DEFAULT_SCREEN } from '../src/screens.js';
 import { SPEC, ARG_NAMES, findCall, patchArgs, moveItem, resizeItem, deleteItem, addStatement } from '../src/designer.js';
 const $ = (id) => document.getElementById(id);
-const fonts = await loadFonts(async (n) => window.__EMBED ? window.__EMBED.fonts[n] : (await fetch(`../src/fonts/${n}.json`)).json());
-const lcd = new Lcd(480, 272, fonts), ctx = $('lcd').getContext('2d'), ov = $('ov'), octx = ov.getContext('2d');
-const S = 1.5; // screen pixels per radio pixel on this page
+// EdgeTX builds a different font set per screen (std / sml / lrg); load each one the first time it is needed
+const fontSets = {};
+const fontsFor = async (set) => (fontSets[set] ||= await loadFonts(async (n) => window.__EMBED ? window.__EMBED.fonts[set][n] : (await fetch(`../src/fonts/${set === 'std' ? '' : set + '/'}${n}.json`)).json()));
+const fonts = await fontsFor('std');
+let scr = SCREENS[localStorage.getItem('lab.screen')] || SCREENS[DEFAULT_SCREEN], W = scr.w, H = scr.h;
+let lcd = new Lcd(W, H, fonts), S = 1.5; // S = screen pixels per radio pixel on this page
+const ctx = $('lcd').getContext('2d'), ov = $('ov'), octx = ov.getContext('2d');
+for (const [k, v] of Object.entries(SCREENS)) $('scr').add(new Option(v.name, k, false, v === scr));
+// resize the canvases, build a fresh simulated LCD with this screen's fonts
+async function sizeScreen(key) {
+  scr = SCREENS[key] || SCREENS[DEFAULT_SCREEN]; W = scr.w; H = scr.h; localStorage.setItem('lab.screen', key);
+  S = Math.min(1.5, 720 / W, 560 / H);
+  lcd = new Lcd(W, H, await fontsFor(scr.fonts));
+  $('lcd').width = W; $('lcd').height = H; ov.width = Math.round(W * S); ov.height = Math.round(H * S);
+  for (const el of [$('lcd'), ov, ov.parentElement]) { el.style.width = Math.round(W * S) + 'px'; el.style.height = Math.round(H * S) + 'px'; }
+}
 import { highlight } from '../src/lua-syntax.js';
 import { lvglSites, matchSites, moveLvgl, resizeLvgl, deleteLvgl, addLvgl, setFields, LV_RESIZE, LV_NOMOVE, lvType } from '../src/designer-lvgl.js';
 // API knowledge for colouring and autocomplete: help text from EdgeTX's own source + what this simulator really implements
@@ -242,7 +257,7 @@ function gutter() {
   $('gutter').innerHTML = Array.from({ length: n }, (_, i) => `<div class="${i + 1 === badLine ? 'bad' : sel && i + 1 === sel.line ? 'sel' : ''}">${i + 1}</div>`).join('');
   $('gutter').scrollTop = $('code').scrollTop;
 }
-const paint = () => { ctx.putImageData(new ImageData(lcd.toRGBA(), 480, 272), 0, 0); overlay(); };
+const paint = () => { ctx.putImageData(new ImageData(lcd.toRGBA(), W, H), 0, 0); overlay(); };
 function fail(r, where) { clearInterval(timer); timer = null; badLine = lineOf(r.error); gutter(); status(`${where}: ${r.error}`, 'err'); }
 function report(extra = '') {
   const unsup = [...lcd.unsupported.keys()], log = host.log.slice(-6).join('\n');
@@ -310,7 +325,7 @@ function run() {
   host.lvglFullscreen(kind !== 'widget' || $('fs').checked);
   gutter();
   if (kind === 'widget') {
-    const c = host.newInstance('w', { w: 480, h: 272 }, {}); if (!c.ok) return fail(c, 'create() error');
+    const c = host.newInstance('w', { w: W, h: H }, {}); if (!c.ok) return fail(c, 'create() error');
     if (frame()) timer = setInterval(frame, 50);
   } else if (kind === 'telemetry') {
     const i = host.callTelemetry('init'); if (!i.ok) return fail(i, 'init() error');
@@ -416,7 +431,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---- mouse on the screen: touch (run mode) or design (drag/resize) ----
-const pos = (e) => { const r = ov.getBoundingClientRect(); return [Math.round(((e.clientX - r.left) / r.width) * 480), Math.round(((e.clientY - r.top) / r.height) * 272)]; };
+const pos = (e) => { const r = ov.getBoundingClientRect(); return [Math.round(((e.clientX - r.left) / r.width) * W), Math.round(((e.clientY - r.top) / r.height) * H)]; };
 const hit = (x, y) => { for (let i = items.length - 1; i >= 0; i--) { const [bx, by, bw, bh] = items[i].bbox; if (x >= bx - 2 && x <= bx + bw + 2 && y >= by - 2 && y <= by + bh + 2) return items[i]; } return null; };
 const handleOf = (it) => { const [bx, by, bw, bh] = it.bbox; return [bx + bw, by + bh]; };
 const resizable = (it) => it && (it.lv ? !!LV_RESIZE[lvType(it)] : SPEC[it.fn] && (SPEC[it.fn].size || SPEC[it.fn].radius !== undefined));
@@ -540,7 +555,7 @@ function showInspector() {
 
 // ---- selection overlay ----
 function overlay() {
-  octx.clearRect(0, 0, 720, 408);
+  octx.clearRect(0, 0, ov.width, ov.height);
   if (!design) return;
   const it = selItem(); if (!it) return;
   let [x, y, w, h] = it.bbox;
@@ -554,8 +569,10 @@ $('m_run').onclick = () => setDesign(false); $('m_des').onclick = () => setDesig
 // what the simulator supports (from the host's own tables)
 {
   const h = new LuaHost({ fengari: window.fengari, lcd: new Lcd(480, 272, fonts) });
-  $('api').textContent = [...h.apiNames].filter((n) => !n.startsWith('__') && !/^lcd\.(drawChannel|drawSwitch|drawSource|drawBitmapPattern|drawBitmapPatternPie|exitFullScreen)$/.test(n)).sort().join('\n');
+  $('api').textContent = [...h.apiNames].filter((n) => !n.startsWith('__') && !/^lcd\.(drawSwitch|drawSource|drawBitmapPattern|drawBitmapPatternPie)$/.test(n)).sort().join('\n');
 }
+$('scr').onchange = async () => { await sizeScreen($('scr').value); sel = null; run(); showInspector(); };
+await sizeScreen(Object.keys(SCREENS).find((k) => SCREENS[k] === scr));
 refreshHl(); record();
 run();
 </script></body></html>
