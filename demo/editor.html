@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>EdgeTX Lua Lab - script editor</title>
+<style>
+ :root{color-scheme:dark}
+ body{font:14px system-ui,sans-serif;background:#1b1b1b;color:#ddd;margin:0;padding:12px 16px}
+ h1{font-size:17px;margin:0 0 8px} h1 small{color:#888;font-weight:normal}
+ .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+ button,select{background:#2c2c2c;color:#ddd;border:1px solid #555;border-radius:4px;padding:4px 10px;font:inherit;cursor:pointer}
+ button:hover{background:#3a3a3a}
+ .main{display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+ .ed{position:relative;display:flex;border:1px solid #444;background:#111;width:600px;height:520px}
+ #gutter{width:44px;overflow:hidden;background:#181818;color:#666;text-align:right;font:13px/1.5 Consolas,monospace;padding:8px 6px 8px 0;box-sizing:border-box;user-select:none;white-space:pre}
+ #gutter .bad{color:#fff;background:#a33}
+ #code{flex:1;background:#111;color:#cfe;border:0;outline:0;resize:none;font:13px/1.5 Consolas,monospace;padding:8px;tab-size:2;white-space:pre;overflow:auto}
+ canvas{image-rendering:pixelated;border:1px solid #555;width:720px;height:408px;display:block;background:#000}
+ #status{font:12px Consolas,monospace;white-space:pre-wrap;min-height:34px;margin:6px 0;max-width:720px}
+ .err{color:#f88}.ok{color:#8d8}.warn{color:#eb6}
+ .side{width:720px}
+ table{border-collapse:collapse;font-size:12px} td{padding:1px 6px 1px 0} input.t{width:90px;background:#222;color:#ddd;border:1px solid #444;padding:1px 4px}
+ details{margin-top:8px;max-width:720px} summary{cursor:pointer;color:#9cf}
+ #api{font:12px Consolas,monospace;columns:3;column-gap:16px;color:#aaa}
+</style></head><body>
+<h1>EdgeTX Lua Lab <small>&mdash; script editor (prototype) &middot; simulated colour radio, 480&times;272</small></h1>
+<div class="bar">
+ <select id="tpl"></select> <button id="load">Load template</button>
+ <button id="open">Open .lua&hellip;</button> <button id="save">Save .lua</button>
+ <label><input type="checkbox" id="auto" checked> run as I type</label> <button id="run">Run (Ctrl+Enter)</button>
+ <span id="kind" style="color:#9cf"></span>
+ <input type="file" id="file" accept=".lua,text/plain" hidden>
+</div>
+<div class="main">
+ <div><div class="ed"><div id="gutter"></div><textarea id="code" spellcheck="false" wrap="off"></textarea></div>
+  <div id="status"></div></div>
+ <div class="side"><canvas id="lcd" width="480" height="272"></canvas>
+  <details open><summary>Simulated telemetry sensors</summary><table id="sens"></table><button id="addsens">+ sensor</button></details>
+  <details><summary>What this simulator supports</summary><div id="api"></div></details>
+ </div>
+</div>
+<script src="../vendor/fengari/fengari-web.js"></script>
+<script type="module">
+import { Lcd, loadFonts } from '../src/lcd.js';
+import { LuaHost } from '../src/host.js';
+const $ = (id) => document.getElementById(id);
+const fonts = await loadFonts(async (n) => (await fetch(`../src/fonts/${n}.json`)).json());
+const lcd = new Lcd(480, 272, fonts), ctx = $('lcd').getContext('2d');
+
+const TEMPLATES = {
+ 'Widget: telemetry gauge': `-- A widget: EdgeTX calls create() once and refresh() many times a second.
+local options = {
+  { "Source", SOURCE, 1 },
+  { "Max", VALUE, 100, 1, 1000 },
+}
+
+local function create(zone, options)
+  return { zone = zone, options = options, rssiMin = 100 }
+end
+
+local function update(widget, options)
+  widget.options = options
+end
+
+local function refresh(widget, event, touchState)
+  lcd.setColor(CUSTOM_COLOR, lcd.RGB(10, 30, 60))
+  lcd.clear(CUSTOM_COLOR)
+  local rssi = getValue("RSSI")
+  widget.rssiMin = math.min(widget.rssiMin, rssi)
+  lcd.drawText(10, 10, "RSSI", MIDSIZE + WHITE)
+  lcd.drawNumber(10, 40, rssi, XXLSIZE + WHITE)
+  lcd.drawGauge(10, 120, 300, 22, rssi, 100, rssi > 50 and GREEN or RED)
+  lcd.drawText(10, 150, "min " .. widget.rssiMin, SMLSIZE + YELLOW)
+  lcd.drawFilledCircle(400, 100, 40, rssi > 50 and GREEN or RED)
+  lcd.drawCircle(400, 100, 44, WHITE)
+  lcd.drawArc(400, 200, 40, 0, rssi * 3.6, WHITE)
+end
+
+return { name = "Gauge", options = options, create = create, update = update, refresh = refresh }
+`,
+ 'Telemetry script (color radios)': `-- A telemetry script: init() once, then run(event) every frame.
+local function init()
+end
+
+local function run(event, touchState)
+  lcd.clear(COLOR_THEME_SECONDARY3)
+  lcd.drawText(4, 4, "Telemetry script", BOLD + COLOR_THEME_PRIMARY1)
+  lcd.drawText(4, 34, "Batt: " .. string.format("%.1f V", getValue("tx-voltage")), COLOR_THEME_PRIMARY1)
+  lcd.drawText(4, 60, "Alt:  " .. string.format("%.0f m", getValue("Alt")), COLOR_THEME_PRIMARY1)
+  lcd.drawText(4, 86, "Time: " .. getTime(), COLOR_THEME_PRIMARY1)
+  return 0
+end
+
+return { init = init, run = run }
+`,
+ 'Plain drawing script': `-- Runs once, top to bottom. Good for trying drawing functions.
+lcd.clear(COLOR_THEME_PRIMARY1)
+lcd.drawText(10, 10, "Hello EdgeTX", DBLSIZE + WHITE)
+lcd.drawText(10, 56, "BOLD font", BOLD + YELLOW)
+lcd.drawRectangle(10, 90, 150, 60, RED, 3)
+lcd.drawFilledTriangle(200, 150, 260, 90, 320, 150, GREEN)
+lcd.drawPie(400, 120, 40, 0, 240, BLUE)
+lcd.drawLine(10, 200, 460, 260, SOLID, WHITE)
+`,
+};
+for (const n of Object.keys(TEMPLATES)) $('tpl').add(new Option(n));
+$('code').value = localStorage.getItem('lab.script') || TEMPLATES['Widget: telemetry gauge'];
+
+// ---- telemetry sensors ----
+const sensors = JSON.parse(localStorage.getItem('lab.sensors') || 'null') || { RSSI: 90, Alt: 120, 'tx-voltage': 7.9, VFAS: 15.8, Curr: 12.3, GSpd: 11, Hdg: 90, Sats: 14 };
+function drawSensors() {
+  $('sens').innerHTML = '';
+  for (const [k, v] of Object.entries(sensors)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${k}</td><td><input type="range" min="${Math.min(0, v * 2)}" max="${Math.max(100, v * 2)}" step="0.1" value="${v}"></td><td><input class="t" value="${v}"></td>`;
+    const [rng, txt] = tr.querySelectorAll('input');
+    const set = (x) => { sensors[k] = +x; rng.value = x; txt.value = x; localStorage.setItem('lab.sensors', JSON.stringify(sensors)); restartTelemetry(); };
+    rng.oninput = () => set(rng.value); txt.onchange = () => set(txt.value);
+    $('sens').appendChild(tr);
+  }
+}
+$('addsens').onclick = () => { const n = prompt('Sensor name (as used in getValue):'); if (n) { sensors[n] = 0; drawSensors(); } };
+drawSensors();
+
+// ---- running ----
+let host = null, kind = '', timer = null, widgetOk = false;
+const status = (msg, cls = 'ok') => { $('status').className = cls; $('status').textContent = msg; };
+const gutter = () => {
+  const n = $('code').value.split('\n').length;
+  $('gutter').innerHTML = Array.from({ length: n }, (_, i) => (i + 1 === badLine ? `<div class="bad">${i + 1}</div>` : `<div>${i + 1}</div>`)).join('');
+  $('gutter').scrollTop = $('code').scrollTop;
+};
+let badLine = 0;
+const lineOf = (err) => { const m = /(?:script):(\d+):/.exec(err || ''); return m ? +m[1] : 0; };
+const paint = () => ctx.putImageData(new ImageData(lcd.toRGBA(), 480, 272), 0, 0);
+function fail(r, where) {
+  clearInterval(timer); timer = null; badLine = lineOf(r.error); gutter();
+  status(`${where}: ${r.error}`, 'err');
+}
+function report(extra = '') {
+  const unsup = [...lcd.unsupported.keys()];
+  const log = host.log.slice(-6).join('\n');
+  status('running ' + kind + (extra ? ' - ' + extra : '') + (unsup.length ? '\nnot simulated yet (draws nothing): ' + unsup.join(', ') : '') + (log ? '\nprint(): ' + log : ''), unsup.length ? 'warn' : 'ok');
+}
+function restartTelemetry() { if (host) Object.assign(host.telemetry, sensors); }
+function run() {
+  clearInterval(timer); badLine = 0; gutter(); localStorage.setItem('lab.script', $('code').value);
+  lcd.unsupported.clear(); lcd.clear(0);
+  host = new LuaHost({ fengari: window.fengari, lcd, telemetry: { ...sensors }, modelName: 'Simulated' });
+  const m = host.loadModuleText($('code').value, '=script');
+  if (!m.ok) { paint(); return fail(m, 'error'); }
+  kind = m.kind; $('kind').textContent = kind === 'plain' ? 'plain script' : kind + ' script';
+  if (kind === 'widget') {
+    const c = host.newInstance('w', { w: 480, h: 272 }, {});
+    if (!c.ok) return fail(c, 'create() error');
+    const tick = () => { const r = host.callWidget('refresh', 'w'); if (!r.ok) { fail(r, 'refresh() error'); return false; } paint(); report(); return true; };
+    if (tick()) timer = setInterval(tick, 100);
+  } else if (kind === 'telemetry') {
+    const i = host.callTelemetry('init'); if (!i.ok) return fail(i, 'init() error');
+    const tick = () => { const r = host.callTelemetry('run', 0); if (!r.ok) { fail(r, 'run() error'); return false; } paint(); report(); return true; };
+    if (tick()) timer = setInterval(tick, 100);
+  } else { paint(); report('ran once'); }
+}
+let deb = 0;
+$('code').addEventListener('input', () => { gutter(); if ($('auto').checked) { clearTimeout(deb); deb = setTimeout(run, 350); } });
+$('code').addEventListener('scroll', () => { $('gutter').scrollTop = $('code').scrollTop; });
+$('code').addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; t.value = t.value.slice(0, s) + '  ' + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = s + 2; t.dispatchEvent(new Event('input')); }
+  if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); run(); }
+});
+$('run').onclick = run;
+$('load').onclick = () => { $('code').value = TEMPLATES[$('tpl').value]; run(); };
+$('save').onclick = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([$('code').value], { type: 'text/plain' })); a.download = 'script.lua'; a.click(); };
+$('open').onclick = () => $('file').click();
+$('file').onchange = async (e) => { const f = e.target.files[0]; if (f) { $('code').value = await f.text(); run(); } };
+
+// what the simulator supports (from the host's own tables)
+{
+  const h = new LuaHost({ fengari: window.fengari, lcd: new Lcd(480, 272, fonts) });
+  const names = [...h.apiNames].filter((n) => !n.startsWith('__') && !/^(lcd\.(drawChannel|drawSwitch|drawSource|drawBitmapPattern|drawBitmapPatternPie|exitFullScreen))$/.test(n)).sort();
+  $('api').textContent = names.join('\n');
+}
+run();
+</script></body></html>

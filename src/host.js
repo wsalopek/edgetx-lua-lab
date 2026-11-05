@@ -98,6 +98,8 @@ export class LuaHost {
   // ---- small fengari helpers ----
   get S() { return this.f.to_luastring; }
   _def(tbl, name, fn) {
+    (this.apiNames ||= new Set()).add(tbl ? tbl + '.' + name : name);
+    const raw = fn; fn = () => { try { return raw(); } catch (e) { if (e && e.message !== undefined && typeof e.message === 'string' && !(e instanceof Error === false)) { this.f.lauxlib.luaL_error(this.L, this.S((tbl ? tbl + '.' : '') + name + ': ' + e.message)); } throw e; } };
     const { lua } = this.f; const L = this.L;
     if (tbl) { lua.lua_getglobal(L, this.S(tbl)); lua.lua_pushjsfunction(L, fn); lua.lua_setfield(L, -2, this.S(name)); lua.lua_pop(L, 1); }
     else { lua.lua_pushjsfunction(L, fn); lua.lua_setglobal(L, this.S(name)); }
@@ -122,7 +124,7 @@ export class LuaHost {
     const buf = this.S(code);
     let st = lauxlib.luaL_loadbuffer(L, buf, buf.length, this.S(chunkName));
     if (st === lua.LUA_OK) st = lua.lua_pcall(L, 0, 0, 0);
-    if (st !== lua.LUA_OK) { const error = to_jsstring(lua.lua_tostring(L, -1)); lua.lua_pop(L, 1); return { ok: false, error }; }
+    if (st !== lua.LUA_OK) { const e = lua.lua_tostring(L, -1); const error = e ? to_jsstring(e) : '(error value is not a string)'; lua.lua_pop(L, 1); return { ok: false, error }; }
     return { ok: true };
   }
   // ---- widgets: load main.lua, call create()/refresh() like EdgeTX does ----
@@ -138,6 +140,24 @@ export class LuaHost {
     this.instances = new Set();
     return this.newInstance('default', zone, options);
   }
+  // Load a user script given as text. Kinds: 'widget' (returns table with create), 'telemetry' (returns table with run),
+  // 'plain' (just runs top to bottom). Returns { ok, kind, error }.
+  loadModuleText(text, chunk = '=script') {
+    const { lua, lauxlib, to_jsstring } = this.f; const L = this.L;
+    this.instances = new Set(); lua.lua_pushnil(L); lua.lua_setglobal(L, this.S('__widgetModule')); lua.lua_pushnil(L); lua.lua_setglobal(L, this.S('__instances'));
+    const buf = this.S(text);
+    let st = lauxlib.luaL_loadbuffer(L, buf, buf.length, this.S(chunk));
+    if (st === lua.LUA_OK) st = lua.lua_pcall(L, 0, 1, 0);
+    if (st !== lua.LUA_OK) { const error = to_jsstring(lua.lua_tostring(L, -1)); lua.lua_pop(L, 1); return { ok: false, error }; }
+    lua.lua_setglobal(L, this.S('__widgetModule'));
+    const k = this.evalString("type(__widgetModule) == 'table' and (__widgetModule.create and 'widget' or __widgetModule.run and 'telemetry') or 'plain'");
+    return { ok: true, kind: k.value };
+  }
+  // run a telemetry-script function: init() or run(event) / background()
+  callTelemetry(fn, ...args) {
+    return this.exec("if __widgetModule." + fn + " then local r = __widgetModule." + fn + "(" + args.map((a) => Number(a) | 0).join(',') + ") if r == 2 then __done = true end end", '=' + fn);
+  }
+
   // EdgeTX can show the same widget on several screens; each gets its own create() but they share script state.
   newInstance(id, zone, options = {}) {
     this.instances.add(id);
@@ -279,7 +299,7 @@ export class LuaHost {
   // ---- general API ----
   _installGeneral() {
     const { lua, lauxlib, to_jsstring } = this.f; const L = this.L;
-    this._def(null, 'getTime', () => { lua.lua_pushinteger(L, this.now()); return 1; });
+    this._def(null, 'getTime', () => { lua.lua_pushinteger(L, this.now() & 0x7fffffff); return 1; });
     this._def(null, 'getValue', () => {
       let v = 0;
       if (lua.lua_type(L, 1) === lua.LUA_TSTRING) v = this.telemetry[to_jsstring(lua.lua_tostring(L, 1))] ?? 0;

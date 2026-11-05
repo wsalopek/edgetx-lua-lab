@@ -24,3 +24,11 @@ collaboration with the EdgeTX project.)
 GPL-3.0, matching EdgeTX and Yaapu. See `LICENSE`.
 
 See `docs/NOTES.md` for research notes and `docs/MILESTONE1.md` for the current plan.
+
+## Try it (no install; needs only Node to serve the files)
+```
+node tools/serve.mjs 8130
+```
+- `demo/editor.html` - write a widget / telemetry / plain script, see the simulated radio screen, errors point at the failing line
+- `demo/yaapu.html` - the real Yaapu widget flying on simulated ArduPilot telemetry
+- `demo/lab.html` - the original minimal editor prototype
